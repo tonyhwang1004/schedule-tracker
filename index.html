@@ -3,426 +3,233 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>김엄마독서실 일정표 제출 현황</title>
+  <title>정기일정 제출 현황</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif; }
   </style>
 </head>
-<body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useEffect, useMemo, useCallback } = React;
+<body class="bg-slate-100 min-h-screen p-4">
+  <div class="max-w-4xl mx-auto">
+    <h1 class="text-2xl font-bold text-center mb-2">📚 정기일정 제출 현황</h1>
+    <p class="text-center text-slate-500 text-sm mb-6">Google Sheets 실시간 연동</p>
 
-    // 설정 - 여기서 스프레드시트 정보 변경
-    const CONFIG = {
-      SPREADSHEET_ID: '1OVEffnCRTZ1A-cVCb4CYiYe3MicyI9TSkJNsau4mGVo',
-      SHEET_GIDS: { floor7: '141026233', floor8: '1949498498' }
-    };
+    <!-- 상태바 -->
+    <div class="bg-white rounded-xl p-3 mb-4 flex flex-wrap items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <span id="status" class="text-sm text-slate-500">⏳ 로딩중...</span>
+      </div>
+      <button onclick="loadGoogleSheets()" class="px-3 py-1 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600">🔄 새로고침</button>
+    </div>
 
-    function App() {
-      const [submissionData, setSubmissionData] = useState(null);
-      const [rosterData, setRosterData] = useState(null);
-      const [activeTab, setActiveTab] = useState('notSubmitted');
-      const [searchTerm, setSearchTerm] = useState('');
-      const [floorFilter, setFloorFilter] = useState('all');
-      const [copiedName, setCopiedName] = useState(null);
-      const [copiedAll, setCopiedAll] = useState(false);
-      const [loading, setLoading] = useState(false);
-      const [lastUpdated, setLastUpdated] = useState(null);
-      const [error, setError] = useState(null);
-      const [autoRefresh, setAutoRefresh] = useState(true);
-      const [refreshInterval, setRefreshInterval] = useState(30);
+    <!-- 수능선배 업로드 -->
+    <label id="uploadBox" class="block p-4 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center mb-6 bg-white hover:border-blue-400">
+      <div class="text-lg mb-1">📁 수능선배.xlsx 업로드</div>
+      <div class="text-sm text-slate-500">제출 현황 파일</div>
+      <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadSubmission(this)">
+    </label>
 
-      const parseCSV = (csvText) => {
-        const lines = csvText.split('\n');
-        if (lines.length === 0) return [];
-        
-        const parseRow = (line) => {
-          const result = [];
-          let current = '';
-          let inQuotes = false;
-          for (let i = 0; i < line.length; i++) {
-            const char = line[i];
-            if (char === '"') inQuotes = !inQuotes;
-            else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
-            else current += char;
-          }
-          result.push(current.trim());
-          return result;
-        };
+    <!-- 결과 -->
+    <div id="result"></div>
+  </div>
 
-        const headers = parseRow(lines[0]);
-        return lines.slice(1).filter(l => l.trim()).map(line => {
-          const values = parseRow(line);
-          const row = {};
-          headers.forEach((h, i) => row[h] = values[i] || '');
-          return row;
-        });
-      };
+  <script>
+    // 설정
+    const SPREADSHEET_ID = '1OVEffnCRTZ1A-cVCb4CYiYe3MicyI9TSkJNsau4mGVo';
+    const SHEET_GIDS = { floor7: '141026233', floor8: '1949498498' };
 
-      const formatPhone = (phone) => {
-        if (!phone) return null;
-        const c = phone.toString().replace(/\D/g, '');
-        if (c.length === 10) return `010-${c.slice(1,5)}-${c.slice(5)}`;
-        if (c.length === 11) return `${c.slice(0,3)}-${c.slice(3,7)}-${c.slice(7)}`;
-        return phone;
-      };
+    // 데이터
+    let roster = { floor7: [], floor8: [] };
+    let submission = { submitted: [], parentApproved: [], supervisorApproved: [] };
+    let copiedText = '';
 
-      const loadData = useCallback(async (silent = false) => {
-        if (!silent) setLoading(true);
-        setError(null);
-        
-        try {
-          const fetchSheet = async (gid) => {
-            const res = await fetch(`https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid=${gid}`);
-            if (!res.ok) throw new Error('시트 로드 실패');
-            return parseCSV(await res.text());
-          };
-
-          const processStudents = (data) => data
-            .filter(row => {
-              const name = Object.values(row)[0];
-              return name && name.length > 1 && name.length < 10 && !name.includes('학생');
-            })
-            .map(row => {
-              const values = Object.values(row);
-              const keys = Object.keys(row);
-              return {
-                name: values[0]?.trim(),
-                phone: formatPhone(values[keys.findIndex(k => k.includes('학생 전화'))]),
-                parentPhone: formatPhone(values[keys.findIndex(k => k.includes('학부모'))])
-              };
-            })
-            .filter(s => s.name && s.name.length > 1);
-
-          const data7 = await fetchSheet(CONFIG.SHEET_GIDS.floor7);
-          let data8 = [];
-          try { data8 = await fetchSheet(CONFIG.SHEET_GIDS.floor8); } catch(e) {}
-
-          setRosterData({ floor7: processStudents(data7), floor8: processStudents(data8) });
-          setLastUpdated(new Date());
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          if (!silent) setLoading(false);
-        }
-      }, []);
-
-      useEffect(() => { loadData(); }, []);
+    // Google Sheets에서 데이터 가져오기
+    async function loadGoogleSheets() {
+      document.getElementById('status').textContent = '⏳ 로딩중...';
       
-      useEffect(() => {
-        if (!autoRefresh) return;
-        const interval = setInterval(() => loadData(true), refreshInterval * 1000);
-        return () => clearInterval(interval);
-      }, [autoRefresh, refreshInterval, loadData]);
+      try {
+        // 7층 데이터
+        const res7 = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GIDS.floor7}`);
+        const csv7 = await res7.text();
+        roster.floor7 = parseNames(csv7);
 
-      const processFile = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-          const wb = XLSX.read(evt.target.result, { type: 'array' });
-          const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-          const categorized = { submitted: [], parentApproved: [], supervisorApproved: [] };
-          data.forEach(row => {
-            const name = row['이름']?.toString().trim();
-            const status = row['승인상태']?.toString().trim();
-            if (!name) return;
-            const student = { name, status };
-            if (status === '제출 단계') categorized.submitted.push(student);
-            else if (status === '학부모 승인 완료') categorized.parentApproved.push(student);
-            else if (status === '사감 승인 완료') categorized.supervisorApproved.push(student);
-          });
-          setSubmissionData(categorized);
-        };
-        reader.readAsArrayBuffer(file);
-      };
+        // 8층 데이터
+        const res8 = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GIDS.floor8}`);
+        const csv8 = await res8.text();
+        roster.floor8 = parseNames(csv8);
 
-      // 개별 이름 복사
-      const copyName = async (name) => {
-        await navigator.clipboard.writeText(name);
-        setCopiedName(name);
-        setTimeout(() => setCopiedName(null), 1500);
-      };
-
-      // 전체 이름 복사 (줄바꿈으로 구분)
-      const copyAllNames = async (students) => {
-        const names = students.map(s => s.name).join('\n');
-        await navigator.clipboard.writeText(names);
-        setCopiedAll(true);
-        setTimeout(() => setCopiedAll(false), 2000);
-      };
-
-      const result = useMemo(() => {
-        if (!submissionData || !rosterData) return null;
-        const submitted = new Set([
-          ...submissionData.submitted.map(s => s.name),
-          ...submissionData.parentApproved.map(s => s.name),
-          ...submissionData.supervisorApproved.map(s => s.name)
-        ]);
-        const notSubmitted8 = rosterData.floor8.filter(s => !submitted.has(s.name));
-        const notSubmitted7 = rosterData.floor7.filter(s => !submitted.has(s.name));
-        return {
-          notSubmitted: { floor8: notSubmitted8, floor7: notSubmitted7 },
-          stats: {
-            total8: rosterData.floor8.length, total7: rosterData.floor7.length,
-            notSubmitted8: notSubmitted8.length, notSubmitted7: notSubmitted7.length,
-            submitted8: rosterData.floor8.length - notSubmitted8.length,
-            submitted7: rosterData.floor7.length - notSubmitted7.length,
-            submittedStage: submissionData.submitted.length,
-            parentApproved: submissionData.parentApproved.length,
-            supervisorApproved: submissionData.supervisorApproved.length
-          }
-        };
-      }, [submissionData, rosterData]);
-
-      const filter = (students) => students?.filter(s => !searchTerm || s.name.includes(searchTerm)) || [];
-
-      const StudentCard = ({ student, color }) => {
-        const colors = {
-          red: 'bg-red-50 border-red-200 text-red-800 hover:bg-red-100',
-          yellow: 'bg-yellow-50 border-yellow-200 text-yellow-800 hover:bg-yellow-100',
-          blue: 'bg-blue-50 border-blue-200 text-blue-800 hover:bg-blue-100',
-          green: 'bg-green-50 border-green-200 text-green-800 hover:bg-green-100'
-        };
-        const isCopied = copiedName === student.name;
-        return (
-          <div 
-            onClick={() => copyName(student.name)}
-            className={`px-3 py-2 rounded-lg border ${colors[color]} text-sm cursor-pointer transition-all ${isCopied ? 'ring-2 ring-blue-400' : ''}`}
-          >
-            <div className="font-medium flex items-center gap-1">
-              {student.name}
-              {isCopied && <span className="text-xs text-blue-500">✓복사됨</span>}
-            </div>
-          </div>
-        );
-      };
-
-      return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-4">
-          <div className="max-w-5xl mx-auto">
-            <div className="text-center mb-4">
-              <h1 className="text-2xl font-bold text-slate-800 mb-1">📚 김엄마독서실 일정표 제출 현황</h1>
-              <p className="text-slate-500 text-sm">실시간 Google Sheets 연동</p>
-            </div>
-
-            {/* 상태바 */}
-            <div className="bg-white rounded-xl shadow-sm border p-3 mb-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <span className={`px-2 py-1 rounded-full text-xs ${autoRefresh ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
-                    {autoRefresh ? '🟢 실시간' : '⚪ 수동'}
-                  </span>
-                  {lastUpdated && <span className="text-xs text-slate-400">{lastUpdated.toLocaleTimeString('ko-KR')}</span>}
-                  {loading && <span className="text-blue-500">⏳</span>}
-                </div>
-                <div className="flex items-center gap-2">
-                  <select value={refreshInterval} onChange={e => setRefreshInterval(+e.target.value)} className="text-xs border rounded px-2 py-1">
-                    <option value={10}>10초</option>
-                    <option value={30}>30초</option>
-                    <option value={60}>1분</option>
-                  </select>
-                  <button onClick={() => setAutoRefresh(!autoRefresh)} className={`text-xs px-3 py-1 rounded-lg ${autoRefresh ? 'bg-green-500 text-white' : 'bg-slate-200'}`}>
-                    {autoRefresh ? '자동' : '수동'}
-                  </button>
-                  <button onClick={() => loadData()} className="px-2 py-1 bg-blue-500 text-white rounded-lg text-xs">🔄</button>
-                </div>
-              </div>
-              {error && <div className="mt-2 text-xs text-red-500">{error}</div>}
-            </div>
-
-            {/* 파일 업로드 */}
-            <div className="grid md:grid-cols-2 gap-3 mb-4">
-              <div className={`p-3 border-2 rounded-xl ${rosterData ? 'border-green-400 bg-green-50' : 'border-slate-200'}`}>
-                <span className="text-sm">{rosterData ? `✅ 학생명단 (7층 ${rosterData.floor7.length}명, 8층 ${rosterData.floor8.length}명)` : '⏳ 로딩중...'}</span>
-              </div>
-              <label className={`p-3 border-2 border-dashed rounded-xl cursor-pointer ${submissionData ? 'border-green-400 bg-green-50' : 'border-slate-300 hover:border-blue-400'}`}>
-                <span className="text-sm">{submissionData ? `✅ 수능선배.xlsx (${submissionData.submitted.length + submissionData.parentApproved.length + submissionData.supervisorApproved.length}명)` : '📁 수능선배.xlsx 업로드'}</span>
-                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={processFile} />
-              </label>
-            </div>
-
-            {/* 결과 */}
-            {result && (
-              <>
-                {/* 통계 */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
-                  <div className="bg-white p-3 rounded-xl shadow-sm border">
-                    <div className="text-xs text-slate-500 mb-1">🏢 8층</div>
-                    <div className="text-xl font-bold">{result.stats.submitted8}/{result.stats.total8}</div>
-                    <div className="text-xs text-red-500">미제출 {result.stats.notSubmitted8}명</div>
-                  </div>
-                  <div className="bg-white p-3 rounded-xl shadow-sm border">
-                    <div className="text-xs text-slate-500 mb-1">🏢 7층</div>
-                    <div className="text-xl font-bold">{result.stats.submitted7}/{result.stats.total7}</div>
-                    <div className="text-xs text-red-500">미제출 {result.stats.notSubmitted7}명</div>
-                  </div>
-                  <div className="bg-white p-3 rounded-xl shadow-sm border">
-                    <div className="text-xs text-yellow-600 mb-1">⏳ 승인대기</div>
-                    <div className="text-xl font-bold text-yellow-600">{result.stats.submittedStage + result.stats.parentApproved}명</div>
-                  </div>
-                  <div className="bg-white p-3 rounded-xl shadow-sm border">
-                    <div className="text-xs text-green-600 mb-1">✅ 완료</div>
-                    <div className="text-xl font-bold text-green-600">{result.stats.supervisorApproved}명</div>
-                  </div>
-                </div>
-
-                {/* 검색/필터 */}
-                <div className="flex flex-wrap gap-2 mb-3">
-                  <input type="text" placeholder="🔍 학생 검색..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-                    className="flex-1 min-w-40 px-3 py-2 text-sm border rounded-lg" />
-                  <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
-                    {['all', '8', '7'].map(f => (
-                      <button key={f} onClick={() => setFloorFilter(f)}
-                        className={`px-3 py-1 rounded text-xs font-medium ${floorFilter === f ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}>
-                        {f === 'all' ? '전체' : f + '층'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* 탭 */}
-                <div className="flex gap-1 mb-3 overflow-x-auto">
-                  {[
-                    { id: 'notSubmitted', label: '🔴 미제출', count: result.stats.notSubmitted8 + result.stats.notSubmitted7 },
-                    { id: 'submitted', label: '🟡 제출단계', count: result.stats.submittedStage },
-                    { id: 'parentApproved', label: '🔵 학부모승인', count: result.stats.parentApproved },
-                    { id: 'supervisorApproved', label: '🟢 사감승인', count: result.stats.supervisorApproved }
-                  ].map(tab => (
-                    <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${activeTab === tab.id ? 'bg-white shadow' : 'bg-slate-100'}`}>
-                      {tab.label} <span className="bg-slate-200 px-1.5 py-0.5 rounded-full">{tab.count}</span>
-                    </button>
-                  ))}
-                </div>
-
-                {/* 학생 목록 */}
-                <div className="bg-white rounded-xl shadow-sm border p-4">
-                  {activeTab === 'notSubmitted' && (
-                    <div>
-                      <div className="flex items-center justify-between mb-3 pb-2 border-b">
-                        <span className="text-sm font-semibold">🔴 미제출 학생 (클릭하면 이름 복사)</span>
-                        <button 
-                          onClick={() => {
-                            const all = [];
-                            if (floorFilter !== '7') all.push(...filter(result.notSubmitted.floor8));
-                            if (floorFilter !== '8') all.push(...filter(result.notSubmitted.floor7));
-                            copyAllNames(all);
-                          }}
-                          className={`text-xs px-3 py-1 rounded-lg transition-all ${copiedAll ? 'bg-green-500 text-white' : 'bg-blue-500 text-white hover:bg-blue-600'}`}
-                        >
-                          {copiedAll ? '✓ 복사완료!' : '📋 전체이름 복사'}
-                        </button>
-                      </div>
-                      {floorFilter !== '7' && result.notSubmitted.floor8.length > 0 && (
-                        <div className="mb-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs text-slate-500">8층 ({filter(result.notSubmitted.floor8).length}명)</span>
-                            <button 
-                              onClick={() => copyAllNames(filter(result.notSubmitted.floor8))}
-                              className="text-xs text-blue-500 hover:underline"
-                            >
-                              8층만 복사
-                            </button>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            {filter(result.notSubmitted.floor8).map((s, i) => <StudentCard key={i} student={s} color="red" />)}
-                          </div>
-                        </div>
-                      )}
-                      {floorFilter !== '8' && result.notSubmitted.floor7.length > 0 && (
-                        <div>
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs text-slate-500">7층 ({filter(result.notSubmitted.floor7).length}명)</span>
-                            <button 
-                              onClick={() => copyAllNames(filter(result.notSubmitted.floor7))}
-                              className="text-xs text-blue-500 hover:underline"
-                            >
-                              7층만 복사
-                            </button>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            {filter(result.notSubmitted.floor7).map((s, i) => <StudentCard key={i} student={s} color="red" />)}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {activeTab === 'submitted' && (
-                    <div>
-                      <div className="flex items-center justify-between mb-3 pb-2 border-b">
-                        <span className="text-sm font-semibold">🟡 제출 단계 (학부모 승인 대기)</span>
-                        <button 
-                          onClick={() => copyAllNames(filter(submissionData.submitted))}
-                          className={`text-xs px-3 py-1 rounded-lg ${copiedAll ? 'bg-green-500 text-white' : 'bg-blue-500 text-white hover:bg-blue-600'}`}
-                        >
-                          {copiedAll ? '✓ 복사완료!' : '📋 전체이름 복사'}
-                        </button>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {filter(submissionData.submitted).map((s, i) => <StudentCard key={i} student={s} color="yellow" />)}
-                      </div>
-                    </div>
-                  )}
-                  {activeTab === 'parentApproved' && (
-                    <div>
-                      <div className="flex items-center justify-between mb-3 pb-2 border-b">
-                        <span className="text-sm font-semibold">🔵 학부모 승인 완료 (사감 승인 대기)</span>
-                        <button 
-                          onClick={() => copyAllNames(filter(submissionData.parentApproved))}
-                          className={`text-xs px-3 py-1 rounded-lg ${copiedAll ? 'bg-green-500 text-white' : 'bg-blue-500 text-white hover:bg-blue-600'}`}
-                        >
-                          {copiedAll ? '✓ 복사완료!' : '📋 전체이름 복사'}
-                        </button>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {filter(submissionData.parentApproved).map((s, i) => <StudentCard key={i} student={s} color="blue" />)}
-                      </div>
-                    </div>
-                  )}
-                  {activeTab === 'supervisorApproved' && (
-                    <div>
-                      <div className="flex items-center justify-between mb-3 pb-2 border-b">
-                        <span className="text-sm font-semibold">🟢 사감 승인 완료 ✓</span>
-                        <button 
-                          onClick={() => copyAllNames(filter(submissionData.supervisorApproved))}
-                          className={`text-xs px-3 py-1 rounded-lg ${copiedAll ? 'bg-green-500 text-white' : 'bg-blue-500 text-white hover:bg-blue-600'}`}
-                        >
-                          {copiedAll ? '✓ 복사완료!' : '📋 전체이름 복사'}
-                        </button>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {filter(submissionData.supervisorApproved).map((s, i) => <StudentCard key={i} student={s} color="green" />)}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-
-            {!result && (
-              <div className="text-center py-8 bg-white rounded-xl border text-slate-400">
-                {loading ? '⏳ 로딩중...' : rosterData ? '📁 수능선배.xlsx를 업로드하세요' : '데이터 불러오는 중...'}
-              </div>
-            )}
-
-            <div className="mt-4 text-center">
-              <a href={`https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}/edit`} target="_blank" className="text-xs text-blue-500 hover:underline">
-                📊 Google Sheets 원본 보기
-              </a>
-            </div>
-          </div>
-        </div>
-      );
+        const now = new Date().toLocaleTimeString('ko-KR');
+        document.getElementById('status').innerHTML = `✅ 7층 ${roster.floor7.length}명, 8층 ${roster.floor8.length}명 <span class="text-slate-400 text-xs">(${now})</span>`;
+        
+        render();
+      } catch(e) {
+        document.getElementById('status').textContent = '❌ 로드 실패: ' + e.message;
+      }
     }
 
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    // CSV에서 이름만 추출 (첫 번째 컬럼)
+    function parseNames(csv) {
+      const lines = csv.split('\n');
+      const names = [];
+      
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.trim()) continue;
+        
+        // 첫 번째 컬럼 추출 (따옴표 처리)
+        let name = '';
+        if (line.startsWith('"')) {
+          const endQuote = line.indexOf('"', 1);
+          name = line.substring(1, endQuote);
+        } else {
+          name = line.split(',')[0];
+        }
+        
+        name = name.trim();
+        
+        // 유효한 이름인지 확인 (한글 2-5글자)
+        if (name && /^[가-힣]{2,5}$/.test(name)) {
+          names.push(name);
+        }
+      }
+      
+      return names;
+    }
+
+    // 수능선배.xlsx 파일 로드
+    function loadSubmission(input) {
+      const file = input.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const wb = XLSX.read(e.target.result, { type: 'array' });
+        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+        
+        submission = { submitted: [], parentApproved: [], supervisorApproved: [] };
+        
+        data.forEach(row => {
+          const name = row['이름']?.toString().trim();
+          const status = row['승인상태']?.toString().trim();
+          if (!name || !status) return;
+          
+          if (status === '제출 단계') submission.submitted.push(name);
+          else if (status === '학부모 승인 완료') submission.parentApproved.push(name);
+          else if (status === '사감 승인 완료') submission.supervisorApproved.push(name);
+        });
+
+        document.getElementById('uploadBox').className = 'block p-4 border-2 border-green-400 rounded-xl cursor-pointer text-center mb-6 bg-green-50';
+        document.getElementById('uploadBox').innerHTML = `
+          <div class="text-lg mb-1">✅ 수능선배.xlsx</div>
+          <div class="text-sm text-slate-500">총 ${submission.submitted.length + submission.parentApproved.length + submission.supervisorApproved.length}명 제출</div>
+          <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadSubmission(this)">
+        `;
+        
+        render();
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // 이름 복사
+    function copyName(name) {
+      navigator.clipboard.writeText(name);
+      copiedText = name;
+      render();
+      setTimeout(() => { copiedText = ''; render(); }, 1500);
+    }
+
+    // 전체 이름 복사
+    function copyAll(names) {
+      navigator.clipboard.writeText(names.join('\n'));
+      alert(`${names.length}명 이름 복사 완료!`);
+    }
+
+    // 화면 렌더링
+    function render() {
+      const resultDiv = document.getElementById('result');
+      
+      if (roster.floor7.length === 0 && roster.floor8.length === 0) {
+        resultDiv.innerHTML = '';
+        return;
+      }
+
+      if (submission.submitted.length === 0 && submission.parentApproved.length === 0 && submission.supervisorApproved.length === 0) {
+        resultDiv.innerHTML = '<div class="bg-white rounded-xl p-8 text-center text-slate-400">수능선배.xlsx 파일을 업로드하세요</div>';
+        return;
+      }
+
+      // 제출자 전체 명단
+      const allSubmitted = new Set([...submission.submitted, ...submission.parentApproved, ...submission.supervisorApproved]);
+
+      // 층별 분류
+      const data = {
+        floor8: {
+          notSubmitted: roster.floor8.filter(n => !allSubmitted.has(n)),
+          submitted: roster.floor8.filter(n => submission.submitted.includes(n)),
+          parentApproved: roster.floor8.filter(n => submission.parentApproved.includes(n)),
+          supervisorApproved: roster.floor8.filter(n => submission.supervisorApproved.includes(n))
+        },
+        floor7: {
+          notSubmitted: roster.floor7.filter(n => !allSubmitted.has(n)),
+          submitted: roster.floor7.filter(n => submission.submitted.includes(n)),
+          parentApproved: roster.floor7.filter(n => submission.parentApproved.includes(n)),
+          supervisorApproved: roster.floor7.filter(n => submission.supervisorApproved.includes(n))
+        }
+      };
+
+      resultDiv.innerHTML = `
+        <!-- 8층 -->
+        <div class="bg-white rounded-xl p-4 mb-4">
+          <h2 class="text-lg font-bold mb-4">🏢 8층 (총 ${roster.floor8.length}명)</h2>
+          
+          ${renderSection('🔴 미제출', data.floor8.notSubmitted, 'red')}
+          ${renderSection('🟡 제출단계 (학부모 승인 대기)', data.floor8.submitted, 'yellow')}
+          ${renderSection('🔵 학부모 승인완료 (사감 승인 대기)', data.floor8.parentApproved, 'blue')}
+          ${renderSection('🟢 사감 승인완료', data.floor8.supervisorApproved, 'green')}
+        </div>
+
+        <!-- 7층 -->
+        <div class="bg-white rounded-xl p-4">
+          <h2 class="text-lg font-bold mb-4">🏢 7층 (총 ${roster.floor7.length}명)</h2>
+          
+          ${renderSection('🔴 미제출', data.floor7.notSubmitted, 'red')}
+          ${renderSection('🟡 제출단계 (학부모 승인 대기)', data.floor7.submitted, 'yellow')}
+          ${renderSection('🔵 학부모 승인완료 (사감 승인 대기)', data.floor7.parentApproved, 'blue')}
+          ${renderSection('🟢 사감 승인완료', data.floor7.supervisorApproved, 'green')}
+        </div>
+      `;
+    }
+
+    function renderSection(title, names, color) {
+      if (names.length === 0) return '';
+      
+      const colors = {
+        red: 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100',
+        yellow: 'bg-yellow-50 border-yellow-200 text-yellow-700 hover:bg-yellow-100',
+        blue: 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100',
+        green: 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'
+      };
+
+      return `
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm font-medium">${title} (${names.length}명)</span>
+            <button onclick='copyAll(${JSON.stringify(names)})' class="text-xs text-blue-500 hover:underline">📋 전체복사</button>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            ${names.map(name => `
+              <span onclick="copyName('${name}')" class="px-3 py-1 rounded-lg border cursor-pointer text-sm ${colors[color]} ${copiedText === name ? 'ring-2 ring-blue-400' : ''}">
+                ${name}${copiedText === name ? ' ✓' : ''}
+              </span>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // 초기 로드
+    loadGoogleSheets();
   </script>
 </body>
 </html>
