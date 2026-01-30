@@ -167,13 +167,13 @@
         const wb = XLSX.read(e.target.result, { type: 'array' });
         const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
         
-        // 각 학생의 마지막 기록 찾기
+        // 각 학생의 첫 번째 기록 = 최신 기록 (데이터가 시간 역순이므로)
         const lastRecord = {};
         data.forEach(row => {
           const name = row['이름']?.toString().trim();
           const direction = row['방향']?.toString().trim();
-          if (name && direction) {
-            lastRecord[name] = direction;
+          if (name && direction && !lastRecord[name]) {
+            lastRecord[name] = direction;  // 첫 번째만 저장 (최신)
           }
         });
         
