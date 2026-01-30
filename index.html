@@ -37,7 +37,7 @@
   <script>
     // 설정
     const SPREADSHEET_ID = '1OVEffnCRTZ1A-cVCb4CYiYe3MicyI9TSkJNsau4mGVo';
-    const SHEET_GIDS = { floor7: '141026233', floor8: '1949498498' };
+    const SHEET_GIDS = { floor7: '141026233', floor8: '910829726' };
 
     // 데이터
     let roster = { floor7: [], floor8: [] };
@@ -68,12 +68,13 @@
       }
     }
 
-    // CSV에서 이름만 추출 (첫 번째 컬럼)
+    // CSV에서 이름만 추출 (첫 번째 컬럼, A열)
     function parseNames(csv) {
       const lines = csv.split('\n');
       const names = [];
       
-      for (let i = 1; i < lines.length; i++) {
+      // 첫 번째 행(헤더)부터 모두 확인 (헤더가 비어있을 수 있음)
+      for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (!line.trim()) continue;
         
@@ -86,10 +87,10 @@
           name = line.split(',')[0];
         }
         
-        name = name.trim();
+        name = name.replace(/"/g, '').trim();
         
-        // 유효한 이름인지 확인 (한글 2-5글자)
-        if (name && /^[가-힣]{2,5}$/.test(name)) {
+        // 유효한 이름인지 확인 (한글 2-4글자, "학생이름" 등 헤더 제외)
+        if (name && /^[가-힣]{2,4}$/.test(name) && !name.includes('학생') && !name.includes('이름')) {
           names.push(name);
         }
       }
