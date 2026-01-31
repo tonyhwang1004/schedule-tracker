@@ -7,6 +7,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif; }
     .present { box-shadow: 0 0 0 3px #22c55e; }
@@ -118,7 +119,7 @@
       return map[name] || null;
     }
 
-    // 집중실 엑셀 로드
+    // 집중실 엑셀 로드 - 간단한 번호로 표시
     function loadFocusRoom(input) {
       const file = input.files[0];
       if (!file) return;
@@ -135,13 +136,14 @@
           const row = data[i];
           if (!row || row.length < 2) continue;
           
-          // A열: 이름, B열: 좌석번호 (또는 다른 구조일 수 있음)
+          // A열: 이름, B열: 좌석번호
           const name = (row[0] || '').toString().trim();
           const seat = (row[1] || '').toString().trim();
           
           if (name && /^[가-힣]{2,4}$/.test(name) && seat) {
             const seatNum = seat.match(/\d+/);
             if (seatNum) {
+              // 간단하게 1, 2, 3... 으로 저장
               focusRoomSeats[name] = parseInt(seatNum[0]);
             }
           }
@@ -168,17 +170,20 @@
       const statusEl = document.getElementById('freeSeatStatus');
       const resultEl = document.getElementById('freeSeatResult');
       
-      statusEl.innerHTML = '<span class="loading-spinner"></span> 분석 중...';
+      statusEl.innerHTML = '<span class="loading-spinner"></span> 분석 중... (최초 로딩 시 시간이 걸릴 수 있습니다)';
       resultEl.innerHTML = '';
 
       try {
         let parsed = {};
         
         if (file.type === 'application/pdf') {
-          // PDF 분석 (좌표 기반)
-          parsed = await extractSeatsFromPDF(file);
+          // PDF → 이미지 → OCR 분석
+          parsed = await extractSeatsFromPDFWithOCR(file, statusEl);
+        } else if (file.type.startsWith('image/')) {
+          // 이미지 직접 OCR
+          parsed = await extractSeatsFromImage(file, statusEl);
         } else {
-          statusEl.innerHTML = '<span class="text-orange-500">⚠️ 이미지 분석은 준비 중입니다. PDF를 사용해주세요.</span>';
+          statusEl.innerHTML = '<span class="text-orange-500">⚠️ PDF 또는 이미지 파일만 지원합니다.</span>';
           return;
         }
 
@@ -216,29 +221,92 @@
       }
     }
 
-    // PDF에서 좌표 기반으로 좌석-이름 매칭
-    async function extractSeatsFromPDF(file) {
+    // PDF → 이미지 → OCR 분석
+    async function extractSeatsFromPDFWithOCR(file, statusEl) {
       const arrayBuffer = await file.arrayBuffer();
       
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
       
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      const result = {};
+      const allResults = {};
       
       for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
+        statusEl.innerHTML = `<span class="loading-spinner"></span> PDF 페이지 ${i}/${pdf.numPages} 변환 중...`;
         
-        // 텍스트 아이템을 좌표와 함께 추출
-        const items = textContent.items.map(item => ({
-          text: item.str.trim(),
-          x: item.transform[4],
-          y: item.transform[5]
+        const page = await pdf.getPage(i);
+        const scale = 2; // 고해상도로 변환
+        const viewport = page.getViewport({ scale });
+        
+        // Canvas에 PDF 페이지 렌더링
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        
+        await page.render({ canvasContext: context, viewport }).promise;
+        
+        // Canvas를 이미지로 변환
+        const imageData = canvas.toDataURL('image/png');
+        
+        statusEl.innerHTML = `<span class="loading-spinner"></span> 페이지 ${i} OCR 분석 중...`;
+        
+        // OCR 수행
+        const pageResults = await performOCR(imageData);
+        Object.assign(allResults, pageResults);
+      }
+      
+      return allResults;
+    }
+
+    // 이미지 직접 OCR 분석
+    async function extractSeatsFromImage(file, statusEl) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          statusEl.innerHTML = '<span class="loading-spinner"></span> 이미지 OCR 분석 중...';
+          const results = await performOCR(e.target.result);
+          resolve(results);
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // Tesseract.js OCR 수행
+    async function performOCR(imageData) {
+      const result = {};
+      
+      try {
+        const { data } = await Tesseract.recognize(imageData, 'kor+eng', {
+          logger: m => {
+            if (m.status === 'recognizing text') {
+              const pct = Math.round(m.progress * 100);
+              document.getElementById('freeSeatStatus').innerHTML = 
+                `<span class="loading-spinner"></span> OCR 인식 중... ${pct}%`;
+            }
+          }
+        });
+        
+        // OCR 결과 파싱
+        const words = data.words || [];
+        const items = words.map(w => ({
+          text: w.text.trim(),
+          x: w.bbox.x0,
+          y: w.bbox.y0,
+          width: w.bbox.x1 - w.bbox.x0,
+          height: w.bbox.y1 - w.bbox.y0
         })).filter(item => item.text);
         
+        console.log('OCR 결과:', items.map(i => i.text + '(' + i.x + ',' + i.y + ')'));
+        
         // 숫자(좌석번호)와 이름 분리
-        const numbers = items.filter(item => /^\d{2,3}$/.test(item.text) && parseInt(item.text) >= 57 && parseInt(item.text) <= 104);
+        const numbers = items.filter(item => {
+          const num = parseInt(item.text);
+          return /^\d{2,3}$/.test(item.text) && num >= 57 && num <= 104;
+        });
         const names = items.filter(item => /^[가-힣]{2,4}\d*$/.test(item.text));
+        
+        console.log('숫자들:', numbers.map(n => n.text));
+        console.log('이름들:', names.map(n => n.text));
         
         // 각 이름에 대해 가장 가까운 위에 있는 숫자 찾기
         names.forEach(nameItem => {
@@ -246,15 +314,13 @@
           let minDistance = Infinity;
           
           numbers.forEach(numItem => {
-            // 숫자가 이름 위에 있어야 함 (y좌표가 더 큼 = PDF에서 위)
-            if (numItem.y > nameItem.y) {
-              // X좌표 차이 계산 (가로 거리)
+            // 숫자가 이름 위에 있어야 함 (y좌표가 작음)
+            if (numItem.y < nameItem.y) {
               const xDiff = Math.abs(numItem.x - nameItem.x);
-              // Y좌표 차이 계산 (세로 거리)
-              const yDiff = numItem.y - nameItem.y;
+              const yDiff = nameItem.y - numItem.y;
               
-              // 가로로 가깝고 (50 이내), 세로로 적당히 위에 있는 것 (100 이내)
-              if (xDiff < 50 && yDiff < 100) {
+              // 가로로 가깝고 (50 이내), 세로로 적당히 위에 있는 것 (80 이내)
+              if (xDiff < 50 && yDiff < 80) {
                 const distance = xDiff + yDiff;
                 if (distance < minDistance) {
                   minDistance = distance;
@@ -268,6 +334,9 @@
             result[nameItem.text] = parseInt(closestNumber.text);
           }
         });
+        
+      } catch (err) {
+        console.error('OCR 오류:', err);
       }
       
       return result;
@@ -320,10 +389,20 @@
         if (name && /^[가-힣]{2,4}$/.test(name) && !name.includes('학생') && !name.includes('이름')) {
           names.push(name);
           
-          // 좌석번호 추출 (숫자만)
+          // 좌석번호 추출 - 지정석만 (집중실, 자유석 제외)
+          // "집중"으로 시작하면 무시 (집중실은 별도 엑셀로 관리)
+          if (seatRaw.startsWith('집중')) {
+            // 집중실은 무시 - 별도 엑셀 업로드로 관리
+            continue;
+          }
+          
           const seatMatch = seatRaw.match(/^(\d+)/);
           if (seatMatch) {
-            seats[name] = parseInt(seatMatch[1]);
+            const seatNum = parseInt(seatMatch[1]);
+            // 8층 지정석(1-56)만 저장, 자유석(57+)은 PDF에서 가져옴
+            if (seatNum >= 1 && seatNum <= 56) {
+              seats[name] = seatNum;
+            }
           }
         }
       }
