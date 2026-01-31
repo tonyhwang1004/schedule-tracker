@@ -571,8 +571,14 @@
           </div>
           <div class="flex flex-wrap gap-2">
             ${sortedNames.map(name => {
-              const isPresent = floorAttendance.present.includes(name);
-              const isExited = floorAttendance.exited.includes(name);
+              // 이름 매칭 (숫자 제거해서도 비교)
+              const cleanName = name.replace(/[0-9]/g, '');
+              const isPresent = floorAttendance.present.includes(name) || 
+                                floorAttendance.present.includes(cleanName) ||
+                                floorAttendance.present.some(n => n.replace(/[0-9]/g, '') === cleanName);
+              const isExited = floorAttendance.exited.includes(name) || 
+                               floorAttendance.exited.includes(cleanName) ||
+                               floorAttendance.exited.some(n => n.replace(/[0-9]/g, '') === cleanName);
               const seatNum = getSeatNumber(name, floor);
               const isFocusRoom = seatNum && seatNum.toString().startsWith('집중');
               const isFreeSeat = floor === 8 && freeSeatMap[name];
