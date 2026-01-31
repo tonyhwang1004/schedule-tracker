@@ -6,9 +6,15 @@
   <title>정기일정 제출 현황</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif; }
     .present { box-shadow: 0 0 0 3px #22c55e; }
+    .seat-num { font-size: 0.7rem; color: #6b7280; margin-right: 2px; }
+    .seat-focus { font-size: 0.7rem; color: #8b5cf6; margin-right: 2px; font-weight: 600; }
+    .seat-free { font-size: 0.7rem; color: #f97316; margin-right: 2px; font-weight: 600; }
+    .loading-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #ddd; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body class="bg-slate-100 min-h-screen p-4">
@@ -25,10 +31,10 @@
     </div>
 
     <!-- 파일 업로드 영역 -->
-    <div class="grid md:grid-cols-3 gap-3 mb-6">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <!-- 수능선배 업로드 -->
       <label id="uploadBox" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-blue-400">
-        <div class="text-base mb-1">📁 수능선배.xlsx</div>
+        <div class="text-base mb-1">📁 수능선배</div>
         <div class="text-xs text-slate-500">제출 현황</div>
         <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadSubmission(this)">
       </label>
@@ -46,12 +52,33 @@
         <div class="text-xs text-slate-500">출입 기록</div>
         <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadAttendance(this, 7)">
       </label>
+
+      <!-- 집중실 좌석 업로드 -->
+      <label id="uploadFocus" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-purple-400">
+        <div class="text-base mb-1">🎯 집중실</div>
+        <div class="text-xs text-slate-500">좌석 배치</div>
+        <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadFocusRoom(this)">
+      </label>
+    </div>
+
+    <!-- 자유석 좌석 업로드 (PDF/이미지 자동 분석) -->
+    <div class="mb-6">
+      <label id="uploadFree" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-orange-400">
+        <div class="text-base mb-1">🪑 8층 자유석 배치도</div>
+        <div class="text-xs text-slate-500">PDF 또는 이미지 업로드 (자동 분석)</div>
+        <input type="file" accept=".pdf,image/*" class="hidden" onchange="loadFreeSeat(this)">
+      </label>
+      <div id="freeSeatStatus" class="mt-2 text-sm text-center"></div>
+      <div id="freeSeatResult" class="mt-2"></div>
     </div>
 
     <!-- 범례 -->
-    <div class="flex items-center gap-4 mb-4 text-sm text-slate-600">
+    <div class="flex flex-wrap items-center gap-4 mb-4 text-sm text-slate-600">
       <span class="flex items-center gap-1"><span class="w-4 h-4 rounded border-2 border-green-500 bg-green-100"></span> 현재 있음</span>
       <span class="flex items-center gap-1"><span class="text-gray-400 text-xs">나감</span> = 퇴실</span>
+      <span class="flex items-center gap-1"><span class="text-gray-500 text-xs">[번호]</span> = 지정석</span>
+      <span class="flex items-center gap-1"><span class="text-orange-500 text-xs font-bold">[번호]</span> = 자유석</span>
+      <span class="flex items-center gap-1"><span class="text-purple-500 text-xs font-bold">[집중N]</span> = 집중실</span>
     </div>
 
     <!-- 결과 -->
@@ -65,11 +92,221 @@
 
     // 데이터
     let roster = { floor7: [], floor8: [] };
+    let seatMap = { floor7: {}, floor8: {} }; // Google Sheets에서 로드
+    let focusRoomSeats = {}; // 집중실 좌석 (엑셀에서 로드)
+    let freeSeatMap = {}; // 자유석 좌석 (PDF 분석 데이터)
+    let freeSeatImage = null; // 자유석 이미지
     let submission = { submitted: [], parentApproved: [], supervisorApproved: [] };
-    let attendance = { floor7: { present: [], exited: [] }, floor8: { present: [], exited: [] } }; // 출석 현황
+    let attendance = { floor7: { present: [], exited: [] }, floor8: { present: [], exited: [] } };
     let copiedText = '';
 
-    // Google Sheets에서 데이터 가져오기
+    // 자유석 초기 데이터 (PDF 업로드 시 자동 분석됨)
+    freeSeatMap = {};
+
+    // 좌석번호 가져오기
+    function getSeatNumber(name, floor) {
+      // 집중실 먼저 체크
+      if (focusRoomSeats[name]) {
+        return '집중' + focusRoomSeats[name];
+      }
+      // 자유석 체크 (8층만)
+      if (floor === 8 && freeSeatMap[name]) {
+        return freeSeatMap[name];
+      }
+      // Google Sheets 데이터
+      const map = floor === 7 ? seatMap.floor7 : seatMap.floor8;
+      return map[name] || null;
+    }
+
+    // 집중실 엑셀 로드
+    function loadFocusRoom(input) {
+      const file = input.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const wb = XLSX.read(e.target.result, { type: 'array' });
+        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+        
+        focusRoomSeats = {};
+        
+        // 헤더 스킵하고 데이터 파싱
+        for (let i = 1; i < data.length; i++) {
+          const row = data[i];
+          if (!row || row.length < 2) continue;
+          
+          // A열: 이름, B열: 좌석번호 (또는 다른 구조일 수 있음)
+          const name = (row[0] || '').toString().trim();
+          const seat = (row[1] || '').toString().trim();
+          
+          if (name && /^[가-힣]{2,4}$/.test(name) && seat) {
+            const seatNum = seat.match(/\d+/);
+            if (seatNum) {
+              focusRoomSeats[name] = parseInt(seatNum[0]);
+            }
+          }
+        }
+
+        const count = Object.keys(focusRoomSeats).length;
+        document.getElementById('uploadFocus').className = 'block p-3 border-2 border-purple-400 rounded-xl cursor-pointer text-center bg-purple-50';
+        document.getElementById('uploadFocus').innerHTML = `
+          <div class="text-base mb-1">✅ 집중실</div>
+          <div class="text-xs text-purple-600">${count}명 배치</div>
+          <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadFocusRoom(this)">
+        `;
+        
+        render();
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // 자유석 PDF/이미지 자동 분석
+    async function loadFreeSeat(input) {
+      const file = input.files[0];
+      if (!file) return;
+
+      const statusEl = document.getElementById('freeSeatStatus');
+      const resultEl = document.getElementById('freeSeatResult');
+      
+      statusEl.innerHTML = '<span class="loading-spinner"></span> 분석 중...';
+      resultEl.innerHTML = '';
+
+      try {
+        let text = '';
+        
+        if (file.type === 'application/pdf') {
+          // PDF 분석
+          text = await extractTextFromPDF(file);
+        } else {
+          // 이미지는 아직 지원 안됨 (Tesseract.js 필요 - 용량이 큼)
+          statusEl.innerHTML = '<span class="text-orange-500">⚠️ 이미지 분석은 준비 중입니다. PDF를 사용해주세요.</span>';
+          return;
+        }
+
+        // 텍스트에서 이름-좌석번호 파싱
+        const parsed = parseFreeSeatText(text);
+        
+        if (Object.keys(parsed).length > 0) {
+          freeSeatMap = parsed;
+          
+          document.getElementById('uploadFree').className = 'block p-3 border-2 border-orange-400 rounded-xl cursor-pointer text-center bg-orange-50';
+          document.getElementById('uploadFree').innerHTML = `
+            <div class="text-base mb-1">✅ 8층 자유석 배치도</div>
+            <div class="text-xs text-orange-600">${Object.keys(parsed).length}명 자동 분석 완료</div>
+            <input type="file" accept=".pdf,image/*" class="hidden" onchange="loadFreeSeat(this)">
+          `;
+          
+          statusEl.innerHTML = `<span class="text-green-600">✅ ${Object.keys(parsed).length}명 좌석 분석 완료!</span>`;
+          
+          // 결과 미리보기
+          resultEl.innerHTML = `
+            <div class="bg-orange-50 rounded-lg p-3 text-sm">
+              <div class="font-bold mb-2 text-orange-700">🪑 자유석 배치 (분석 결과)</div>
+              <div class="flex flex-wrap gap-2">
+                ${Object.entries(parsed).sort((a,b) => a[1] - b[1]).map(([name, seat]) => 
+                  `<span class="px-2 py-1 bg-white rounded border text-xs">[${seat}] ${name}</span>`
+                ).join('')}
+              </div>
+            </div>
+          `;
+          
+          render();
+        } else {
+          statusEl.innerHTML = '<span class="text-red-500">❌ 좌석 정보를 찾을 수 없습니다.</span>';
+        }
+      } catch (err) {
+        console.error(err);
+        statusEl.innerHTML = `<span class="text-red-500">❌ 분석 실패: ${err.message}</span>`;
+      }
+    }
+
+    // PDF에서 텍스트 추출
+    async function extractTextFromPDF(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      let fullText = '';
+      
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str).join(' ');
+        fullText += pageText + '\n';
+      }
+      
+      return fullText;
+    }
+
+    // 자유석 텍스트 파싱 (이름-좌석번호 추출)
+    function parseFreeSeatText(text) {
+      const result = {};
+      
+      // 한글 이름 패턴 (2-4글자 + 선택적 숫자)
+      const namePattern = /[가-힣]{2,4}\d*/g;
+      // 숫자 패턴 (좌석번호: 주로 57-104 범위)
+      const numberPattern = /\b(\d{2,3})\b/g;
+      
+      // 텍스트를 라인별로 분석
+      const lines = text.split(/\s+/);
+      
+      // 숫자와 이름이 인접한 패턴 찾기
+      for (let i = 0; i < lines.length; i++) {
+        const item = lines[i].trim();
+        
+        // 숫자인 경우
+        if (/^\d{2,3}$/.test(item)) {
+          const seatNum = parseInt(item);
+          
+          // 자유석 범위 체크 (57-104)
+          if (seatNum >= 57 && seatNum <= 104) {
+            // 다음 아이템이 이름인지 확인
+            if (i + 1 < lines.length) {
+              const nextItem = lines[i + 1].trim();
+              if (/^[가-힣]{2,4}\d*$/.test(nextItem)) {
+                result[nextItem] = seatNum;
+              }
+            }
+            // 이전 아이템이 이름인지도 확인
+            if (i > 0) {
+              const prevItem = lines[i - 1].trim();
+              if (/^[가-힣]{2,4}\d*$/.test(prevItem) && !result[prevItem]) {
+                result[prevItem] = seatNum;
+              }
+            }
+          }
+        }
+        
+        // 이름인 경우 (한글 2-4자 + 선택적 숫자)
+        if (/^[가-힣]{2,4}\d*$/.test(item)) {
+          // 다음 아이템이 숫자인지 확인
+          if (i + 1 < lines.length) {
+            const nextItem = lines[i + 1].trim();
+            if (/^\d{2,3}$/.test(nextItem)) {
+              const seatNum = parseInt(nextItem);
+              if (seatNum >= 57 && seatNum <= 104) {
+                result[item] = seatNum;
+              }
+            }
+          }
+          // 이전 아이템이 숫자인지도 확인
+          if (i > 0 && !result[item]) {
+            const prevItem = lines[i - 1].trim();
+            if (/^\d{2,3}$/.test(prevItem)) {
+              const seatNum = parseInt(prevItem);
+              if (seatNum >= 57 && seatNum <= 104) {
+                result[item] = seatNum;
+              }
+            }
+          }
+        }
+      }
+      
+      return result;
+    }
+
+    // Google Sheets에서 데이터 가져오기 (이름 + 좌석번호)
     async function loadGoogleSheets() {
       document.getElementById('status').textContent = '⏳ 로딩중...';
       
@@ -77,12 +314,16 @@
         // 7층 데이터
         const res7 = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GIDS.floor7}`);
         const csv7 = await res7.text();
-        roster.floor7 = parseNames(csv7);
+        const data7 = parseNamesAndSeats(csv7);
+        roster.floor7 = data7.names;
+        seatMap.floor7 = data7.seats;
 
         // 8층 데이터
         const res8 = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GIDS.floor8}`);
         const csv8 = await res8.text();
-        roster.floor8 = parseNames(csv8);
+        const data8 = parseNamesAndSeats(csv8);
+        roster.floor8 = data8.names;
+        seatMap.floor8 = data8.seats;
 
         const now = new Date().toLocaleTimeString('ko-KR');
         document.getElementById('status').innerHTML = `✅ 7층 ${roster.floor7.length}명, 8층 ${roster.floor8.length}명 <span class="text-slate-400 text-xs">(${now})</span>`;
@@ -93,34 +334,54 @@
       }
     }
 
-    // CSV에서 이름만 추출 (첫 번째 컬럼, A열)
-    function parseNames(csv) {
+    // CSV에서 이름(A열)과 좌석번호(E열) 추출
+    function parseNamesAndSeats(csv) {
       const lines = csv.split('\n');
       const names = [];
+      const seats = {};
       
-      // 첫 번째 행(헤더)부터 모두 확인 (헤더가 비어있을 수 있음)
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (!line.trim()) continue;
         
-        // 첫 번째 컬럼 추출 (따옴표 처리)
-        let name = '';
-        if (line.startsWith('"')) {
-          const endQuote = line.indexOf('"', 1);
-          name = line.substring(1, endQuote);
-        } else {
-          name = line.split(',')[0];
-        }
+        // CSV 파싱
+        const cols = parseCSVRow(line);
+        const name = (cols[0] || '').replace(/"/g, '').trim();
+        const seatRaw = (cols[4] || '').replace(/"/g, '').trim(); // E열 (인덱스 4)
         
-        name = name.replace(/"/g, '').trim();
-        
-        // 유효한 이름인지 확인 (한글 2-4글자, "학생이름" 등 헤더 제외)
+        // 유효한 이름인지 확인
         if (name && /^[가-힣]{2,4}$/.test(name) && !name.includes('학생') && !name.includes('이름')) {
           names.push(name);
+          
+          // 좌석번호 추출 (숫자만)
+          const seatMatch = seatRaw.match(/^(\d+)/);
+          if (seatMatch) {
+            seats[name] = parseInt(seatMatch[1]);
+          }
         }
       }
       
-      return names;
+      return { names, seats };
+    }
+
+    // CSV 행 파싱 (따옴표 처리)
+    function parseCSVRow(line) {
+      const result = [];
+      let current = '';
+      let inQuotes = false;
+      
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') inQuotes = !inQuotes;
+        else if (char === ',' && !inQuotes) {
+          result.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim());
+      return result;
     }
 
     // 수능선배.xlsx 파일 로드
@@ -157,7 +418,7 @@
       reader.readAsArrayBuffer(file);
     }
 
-    // 출석 파일 로드 (7층/8층)
+    // 출석 파일 로드
     function loadAttendance(input, floor) {
       const file = input.files[0];
       if (!file) return;
@@ -167,17 +428,15 @@
         const wb = XLSX.read(e.target.result, { type: 'array' });
         const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
         
-        // 각 학생의 첫 번째 기록 = 최신 기록 (데이터가 시간 역순이므로)
         const lastRecord = {};
         data.forEach(row => {
           const name = row['이름']?.toString().trim();
           const direction = row['방향']?.toString().trim();
           if (name && direction && !lastRecord[name]) {
-            lastRecord[name] = direction;  // 첫 번째만 저장 (최신)
+            lastRecord[name] = direction;
           }
         });
         
-        // ENTER인 학생 = 현재 있음, EXIT인 학생 = 나감
         const presentStudents = Object.keys(lastRecord).filter(name => lastRecord[name] === 'ENTER');
         const exitedStudents = Object.keys(lastRecord).filter(name => lastRecord[name] === 'EXIT');
         
@@ -232,10 +491,8 @@
         return;
       }
 
-      // 제출자 전체 명단
       const allSubmitted = new Set([...submission.submitted, ...submission.parentApproved, ...submission.supervisorApproved]);
 
-      // 층별 분류
       const data = {
         floor8: {
           notSubmitted: roster.floor8.filter(n => !allSubmitted.has(n)),
@@ -256,25 +513,25 @@
         <div class="bg-white rounded-xl p-4 mb-4">
           <h2 class="text-lg font-bold mb-4">🏢 8층 (총 ${roster.floor8.length}명) ${attendance.floor8.present.length > 0 || attendance.floor8.exited.length > 0 ? `<span class="text-sm font-normal text-green-600">- ${attendance.floor8.present.length}명 있음 / ${attendance.floor8.exited.length}명 나감</span>` : ''}</h2>
           
-          ${renderSection('🔴 미제출', data.floor8.notSubmitted, 'red', attendance.floor8)}
-          ${renderSection('🟡 제출단계 (학부모 승인 대기)', data.floor8.submitted, 'yellow', attendance.floor8)}
-          ${renderSection('🔵 학부모 승인완료 (사감 승인 대기)', data.floor8.parentApproved, 'blue', attendance.floor8)}
-          ${renderSection('🟢 사감 승인완료', data.floor8.supervisorApproved, 'green', attendance.floor8)}
+          ${renderSection('🔴 미제출', data.floor8.notSubmitted, 'red', attendance.floor8, 8)}
+          ${renderSection('🟡 제출단계 (학부모 승인 대기)', data.floor8.submitted, 'yellow', attendance.floor8, 8)}
+          ${renderSection('🔵 학부모 승인완료 (사감 승인 대기)', data.floor8.parentApproved, 'blue', attendance.floor8, 8)}
+          ${renderSection('🟢 사감 승인완료', data.floor8.supervisorApproved, 'green', attendance.floor8, 8)}
         </div>
 
         <!-- 7층 -->
         <div class="bg-white rounded-xl p-4">
           <h2 class="text-lg font-bold mb-4">🏢 7층 (총 ${roster.floor7.length}명) ${attendance.floor7.present.length > 0 || attendance.floor7.exited.length > 0 ? `<span class="text-sm font-normal text-green-600">- ${attendance.floor7.present.length}명 있음 / ${attendance.floor7.exited.length}명 나감</span>` : ''}</h2>
           
-          ${renderSection('🔴 미제출', data.floor7.notSubmitted, 'red', attendance.floor7)}
-          ${renderSection('🟡 제출단계 (학부모 승인 대기)', data.floor7.submitted, 'yellow', attendance.floor7)}
-          ${renderSection('🔵 학부모 승인완료 (사감 승인 대기)', data.floor7.parentApproved, 'blue', attendance.floor7)}
-          ${renderSection('🟢 사감 승인완료', data.floor7.supervisorApproved, 'green', attendance.floor7)}
+          ${renderSection('🔴 미제출', data.floor7.notSubmitted, 'red', attendance.floor7, 7)}
+          ${renderSection('🟡 제출단계 (학부모 승인 대기)', data.floor7.submitted, 'yellow', attendance.floor7, 7)}
+          ${renderSection('🔵 학부모 승인완료 (사감 승인 대기)', data.floor7.parentApproved, 'blue', attendance.floor7, 7)}
+          ${renderSection('🟢 사감 승인완료', data.floor7.supervisorApproved, 'green', attendance.floor7, 7)}
         </div>
       `;
     }
 
-    function renderSection(title, names, color, floorAttendance) {
+    function renderSection(title, names, color, floorAttendance, floor) {
       if (names.length === 0) return '';
       
       const colors = {
@@ -284,6 +541,28 @@
         green: 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'
       };
 
+      // 좌석번호 순으로 정렬 (집중실은 맨 뒤로)
+      const sortedNames = [...names].sort((a, b) => {
+        const seatA = getSeatNumber(a, floor);
+        const seatB = getSeatNumber(b, floor);
+        
+        // 집중실 처리
+        const isFocusA = seatA && seatA.toString().startsWith('집중');
+        const isFocusB = seatB && seatB.toString().startsWith('집중');
+        
+        if (isFocusA && !isFocusB) return 1; // 집중실은 뒤로
+        if (!isFocusA && isFocusB) return -1;
+        if (isFocusA && isFocusB) {
+          const numA = parseInt(seatA.toString().replace('집중', '')) || 999;
+          const numB = parseInt(seatB.toString().replace('집중', '')) || 999;
+          return numA - numB;
+        }
+        
+        const numA = parseInt(seatA) || 999;
+        const numB = parseInt(seatB) || 999;
+        return numA - numB;
+      });
+
       return `
         <div class="mb-4">
           <div class="flex items-center justify-between mb-2">
@@ -291,12 +570,18 @@
             <button onclick='copyAll(${JSON.stringify(names)})' class="text-xs text-blue-500 hover:underline">📋 전체복사</button>
           </div>
           <div class="flex flex-wrap gap-2">
-            ${names.map(name => {
+            ${sortedNames.map(name => {
               const isPresent = floorAttendance.present.includes(name);
               const isExited = floorAttendance.exited.includes(name);
+              const seatNum = getSeatNumber(name, floor);
+              const isFocusRoom = seatNum && seatNum.toString().startsWith('집중');
+              const isFreeSeat = floor === 8 && freeSeatMap[name];
+              let seatClass = 'seat-num';
+              if (isFocusRoom) seatClass = 'seat-focus';
+              else if (isFreeSeat) seatClass = 'seat-free';
               return `
               <span onclick="copyName('${name}')" class="px-3 py-1 rounded-lg border cursor-pointer text-sm ${colors[color]} ${isPresent ? 'present' : ''} ${copiedText === name ? 'ring-2 ring-blue-400' : ''}">
-                ${name}${isExited ? ' <span class="text-gray-400 text-xs">나감</span>' : ''}${copiedText === name ? ' ✓' : ''}
+                ${seatNum ? `<span class="${seatClass}">[${seatNum}]</span>` : ''}${name}${isExited ? ' <span class="text-gray-400 text-xs">나감</span>' : ''}${copiedText === name ? ' ✓' : ''}
               </span>
             `}).join('')}
           </div>
