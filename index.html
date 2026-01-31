@@ -6,7 +6,6 @@
   <title>정기일정 제출 현황</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif; }
     .present { box-shadow: 0 0 0 3px #22c55e; }
@@ -64,24 +63,15 @@
     <!-- 자유석 좌석 입력 -->
     <div class="mb-6">
       <div class="bg-white rounded-xl p-4 border-2 border-orange-200">
-        <div class="text-base font-bold mb-3">🪑 자유석 배치</div>
+        <div class="text-base font-bold mb-3">🪑 자유석 배치 (직접 입력)</div>
         
-        <!-- PDF 업로드 -->
-        <label class="block p-2 border-2 border-dashed border-slate-300 rounded-lg cursor-pointer text-center hover:border-orange-400 mb-3">
-          <span class="text-sm text-slate-600">📄 PDF 업로드 (자동 분석)</span>
-          <input type="file" accept=".pdf" class="hidden" onchange="loadFreeSeatPDF(this)">
-        </label>
-        <div id="freeSeatStatus" class="text-sm text-center mb-3"></div>
-        
-        <!-- 수동 입력 영역 -->
-        <div class="text-xs text-slate-500 mb-2">또는 직접 입력:</div>
-        <div class="grid grid-cols-1 gap-2 mb-3" id="freeSeatInputs">
-          <!-- 동적 생성 -->
-        </div>
+        <!-- 입력 테이블 -->
+        <div class="space-y-2 mb-3" id="freeSeatInputs"></div>
         
         <div class="flex gap-2">
           <button onclick="addFreeSeatRow()" class="flex-1 py-2 border-2 border-dashed border-slate-300 rounded-lg text-slate-500 text-sm hover:border-orange-400">+ 추가</button>
           <button onclick="applyFreeSeats()" class="flex-1 py-2 bg-orange-500 text-white rounded-lg font-bold hover:bg-orange-600">적용</button>
+          <button onclick="clearFreeSeats()" class="px-3 py-2 border border-slate-300 rounded-lg text-slate-500 text-sm hover:bg-slate-100">초기화</button>
         </div>
         
         <div id="freeSeatResult" class="mt-3"></div>
@@ -188,95 +178,6 @@
       reader.readAsArrayBuffer(file);
     }
 
-    // 자유석 PDF 분석
-    async function loadFreeSeatPDF(input) {
-      const file = input.files[0];
-      if (!file) return;
-
-      const statusEl = document.getElementById('freeSeatStatus');
-      statusEl.innerHTML = '<span class="loading"></span> PDF 분석 중...';
-
-      try {
-        const arrayBuffer = await file.arrayBuffer();
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-        
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        const page = await pdf.getPage(1);
-        const textContent = await page.getTextContent();
-        
-        // 텍스트 추출
-        const items = textContent.items.map(item => ({
-          text: item.str.trim(),
-          x: Math.round(item.transform[4]),
-          y: Math.round(item.transform[5])
-        })).filter(item => item.text);
-        
-        console.log('PDF 텍스트:', items);
-        
-        // 인접 텍스트 합치기 (박정원 + 2)
-        const merged = [];
-        const used = new Set();
-        items.forEach((item, i) => {
-          if (used.has(i)) return;
-          let text = item.text;
-          items.forEach((other, j) => {
-            if (i !== j && !used.has(j) && Math.abs(item.y - other.y) <= 3) {
-              const xDiff = other.x - item.x;
-              if (xDiff > 0 && xDiff < 30 && /^\d+$/.test(other.text)) {
-                text += other.text;
-                used.add(j);
-              }
-            }
-          });
-          merged.push({ text, x: item.x, y: item.y });
-          used.add(i);
-        });
-        
-        // 숫자(57-104)와 이름 분리
-        const numbers = merged.filter(item => /^\d{2,3}$/.test(item.text) && parseInt(item.text) >= 57 && parseInt(item.text) <= 104);
-        const names = merged.filter(item => /^[가-힣]{2,4}\d*$/.test(item.text) && item.text !== '입구');
-        
-        console.log('숫자:', numbers);
-        console.log('이름:', names);
-        
-        // 매칭 (Y좌표 방향 무관하게)
-        const results = {};
-        names.forEach(name => {
-          let best = null, minDist = Infinity;
-          numbers.forEach(num => {
-            const xDiff = Math.abs(name.x - num.x);
-            const yDiff = Math.abs(name.y - num.y);
-            if (xDiff < 20 && yDiff >= 5 && yDiff <= 30) {
-              const dist = xDiff + yDiff;
-              if (dist < minDist) { minDist = dist; best = num; }
-            }
-          });
-          if (best) results[name.text] = parseInt(best.text);
-        });
-        
-        console.log('매칭 결과:', results);
-        
-        // 결과 적용
-        if (Object.keys(results).length > 0) {
-          // 입력 필드에 채우기
-          const container = document.getElementById('freeSeatInputs');
-          container.innerHTML = '';
-          Object.entries(results).sort((a,b) => a[1] - b[1]).forEach(([name, seat]) => {
-            addFreeSeatRow(name, seat);
-          });
-          addFreeSeatRow(); // 빈 행 하나 추가
-          
-          statusEl.innerHTML = `<span class="text-green-600">✅ ${Object.keys(results).length}명 추출됨 - 확인 후 "적용" 클릭!</span>`;
-        } else {
-          statusEl.innerHTML = '<span class="text-red-500">❌ 좌석 정보를 찾을 수 없습니다. 직접 입력해주세요.</span>';
-        }
-        
-      } catch (err) {
-        console.error(err);
-        statusEl.innerHTML = `<span class="text-red-500">❌ 분석 실패: ${err.message}</span>`;
-      }
-    }
-
     // 자유석 입력 행 추가
     function addFreeSeatRow(name = '', seat = '') {
       const container = document.getElementById('freeSeatInputs');
@@ -337,6 +238,14 @@
           addFreeSeatRow();
         }
       }
+    }
+
+    // 자유석 초기화
+    function clearFreeSeats() {
+      freeSeatMap = {};
+      initFreeSeatInputs();
+      document.getElementById('freeSeatResult').innerHTML = '';
+      render();
     }
 
     // Google Sheets에서 데이터 가져오기 (이름 + 좌석번호)
