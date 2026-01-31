@@ -105,7 +105,7 @@
       if (focusRoomSeats[name]) {
         return '집중' + focusRoomSeats[name];
       }
-      // 자유석 체크 (8층, PDF에서 로드된 데이터)
+      // 자유석 체크 (8층, 엑셀에서 로드된 데이터)
       if (floor === 8 && freeSeatMap[name]) {
         return freeSeatMap[name];
       }
@@ -113,12 +113,16 @@
       const map = floor === 7 ? seatMap.floor7 : seatMap.floor8;
       const seatNum = map[name];
       
-      // 집중실 긴 번호 필터링 (Google Sheets에서 온 잘못된 값)
-      if (seatNum && seatNum > 100) {
-        return null; // 100 초과는 무시 (집중실 전화번호 등)
-      }
+      // 유효하지 않은 값 필터링
+      if (!seatNum) return null;
       
-      return seatNum || null;
+      // 숫자가 아니면 무시 (집중실 전화번호 등 문자열)
+      if (typeof seatNum !== 'number') return null;
+      
+      // 100 초과는 무시 (잘못된 값)
+      if (seatNum > 100) return null;
+      
+      return seatNum;
     }
 
     // 집중실 엑셀 로드 - 간단한 번호로 표시
