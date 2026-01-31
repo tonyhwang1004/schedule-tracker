@@ -60,22 +60,14 @@
       </label>
     </div>
 
-    <!-- 자유석 좌석 입력 -->
+    <!-- 자유석 좌석 업로드 (엑셀) -->
     <div class="mb-6">
-      <div class="bg-white rounded-xl p-4 border-2 border-orange-200">
-        <div class="text-base font-bold mb-3">🪑 자유석 배치 (직접 입력)</div>
-        
-        <!-- 입력 테이블 -->
-        <div class="space-y-2 mb-3" id="freeSeatInputs"></div>
-        
-        <div class="flex gap-2">
-          <button onclick="addFreeSeatRow()" class="flex-1 py-2 border-2 border-dashed border-slate-300 rounded-lg text-slate-500 text-sm hover:border-orange-400">+ 추가</button>
-          <button onclick="applyFreeSeats()" class="flex-1 py-2 bg-orange-500 text-white rounded-lg font-bold hover:bg-orange-600">적용</button>
-          <button onclick="clearFreeSeats()" class="px-3 py-2 border border-slate-300 rounded-lg text-slate-500 text-sm hover:bg-slate-100">초기화</button>
-        </div>
-        
-        <div id="freeSeatResult" class="mt-3"></div>
-      </div>
+      <label id="uploadFree" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-orange-400">
+        <div class="text-base mb-1">🪑 자유석 배치</div>
+        <div class="text-xs text-slate-500">엑셀 업로드 (이름, 좌석번호)</div>
+        <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadFreeSeat(this)">
+      </label>
+      <div id="freeSeatResult" class="mt-2"></div>
     </div>
 
     <!-- 범례 -->
@@ -178,74 +170,53 @@
       reader.readAsArrayBuffer(file);
     }
 
-    // 자유석 입력 행 추가
-    function addFreeSeatRow(name = '', seat = '') {
-      const container = document.getElementById('freeSeatInputs');
-      const div = document.createElement('div');
-      div.className = 'flex gap-2 items-center';
-      div.innerHTML = `
-        <input type="text" class="flex-1 px-3 py-2 border rounded-lg text-sm" placeholder="이름" value="${name}">
-        <input type="number" class="w-20 px-3 py-2 border rounded-lg text-sm" placeholder="번호" value="${seat}">
-        <button onclick="this.parentElement.remove()" class="px-2 py-2 text-red-400 hover:text-red-600 text-lg">✕</button>
-      `;
-      container.appendChild(div);
-    }
+    // 자유석 엑셀 업로드
+    function loadFreeSeat(input) {
+      const file = input.files[0];
+      if (!file) return;
 
-    // 자유석 적용
-    function applyFreeSeats() {
-      const container = document.getElementById('freeSeatInputs');
-      const rows = container.querySelectorAll('.flex');
-      
-      freeSeatMap = {};
-      
-      rows.forEach(row => {
-        const inputs = row.querySelectorAll('input');
-        const name = inputs[0].value.trim();
-        const seat = parseInt(inputs[1].value);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const wb = XLSX.read(e.target.result, { type: 'array' });
+        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
         
-        if (name && seat && seat >= 57 && seat <= 104) {
-          freeSeatMap[name] = seat;
-        }
-      });
+        freeSeatMap = {};
+        
+        data.forEach(row => {
+          const name = (row['이름'] || '').toString().trim();
+          const seat = parseInt(row['좌석번호']);
+          
+          if (name && seat && seat >= 57 && seat <= 104) {
+            freeSeatMap[name] = seat;
+          }
+        });
 
-      const count = Object.keys(freeSeatMap).length;
-      
-      if (count > 0) {
-        document.getElementById('freeSeatResult').innerHTML = `
-          <div class="bg-orange-50 rounded-lg p-3 text-sm">
-            <div class="text-green-600 font-bold mb-2">✅ ${count}명 적용됨</div>
-            <div class="flex flex-wrap gap-2">
-              ${Object.entries(freeSeatMap).sort((a,b) => a[1] - b[1]).map(([name, seat]) => 
-                `<span class="px-2 py-1 bg-white rounded border text-xs">[${seat}] ${name}</span>`
-              ).join('')}
+        const count = Object.keys(freeSeatMap).length;
+        
+        document.getElementById('uploadFree').className = 'block p-3 border-2 border-orange-400 rounded-xl cursor-pointer text-center bg-orange-50';
+        document.getElementById('uploadFree').innerHTML = `
+          <div class="text-base mb-1">✅ 자유석 배치</div>
+          <div class="text-xs text-orange-600">${count}명 로드 완료</div>
+          <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadFreeSeat(this)">
+        `;
+        
+        // 결과 미리보기
+        if (count > 0) {
+          document.getElementById('freeSeatResult').innerHTML = `
+            <div class="bg-orange-50 rounded-lg p-3 text-sm">
+              <div class="font-bold mb-2 text-orange-700">🪑 자유석 (${count}명)</div>
+              <div class="flex flex-wrap gap-2">
+                ${Object.entries(freeSeatMap).sort((a,b) => a[1] - b[1]).map(([name, seat]) => 
+                  `<span class="px-2 py-1 bg-white rounded border text-xs">[${seat}] ${name}</span>`
+                ).join('')}
+              </div>
             </div>
-          </div>
-        `;
-        render();
-      } else {
-        document.getElementById('freeSeatResult').innerHTML = `
-          <div class="text-red-500 text-sm text-center">이름과 번호(57-104)를 입력해주세요</div>
-        `;
-      }
-    }
-
-    // 초기화 - 빈 입력 행 5개 추가
-    function initFreeSeatInputs() {
-      const container = document.getElementById('freeSeatInputs');
-      if (container) {
-        container.innerHTML = '';
-        for (let i = 0; i < 5; i++) {
-          addFreeSeatRow();
+          `;
         }
-      }
-    }
-
-    // 자유석 초기화
-    function clearFreeSeats() {
-      freeSeatMap = {};
-      initFreeSeatInputs();
-      document.getElementById('freeSeatResult').innerHTML = '';
-      render();
+        
+        render();
+      };
+      reader.readAsArrayBuffer(file);
     }
 
     // Google Sheets에서 데이터 가져오기 (이름 + 좌석번호)
@@ -549,7 +520,6 @@
 
     // 초기 로드
     loadGoogleSheets();
-    initFreeSeatInputs();
   </script>
 </body>
 </html>
