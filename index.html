@@ -172,20 +172,16 @@
       resultEl.innerHTML = '';
 
       try {
-        let text = '';
+        let parsed = {};
         
         if (file.type === 'application/pdf') {
-          // PDF 분석
-          text = await extractTextFromPDF(file);
+          // PDF 분석 (좌표 기반)
+          parsed = await extractSeatsFromPDF(file);
         } else {
-          // 이미지는 아직 지원 안됨 (Tesseract.js 필요 - 용량이 큼)
           statusEl.innerHTML = '<span class="text-orange-500">⚠️ 이미지 분석은 준비 중입니다. PDF를 사용해주세요.</span>';
           return;
         }
 
-        // 텍스트에서 이름-좌석번호 파싱
-        const parsed = parseFreeSeatText(text);
-        
         if (Object.keys(parsed).length > 0) {
           freeSeatMap = parsed;
           
@@ -220,87 +216,58 @@
       }
     }
 
-    // PDF에서 텍스트 추출
-    async function extractTextFromPDF(file) {
+    // PDF에서 좌표 기반으로 좌석-이름 매칭
+    async function extractSeatsFromPDF(file) {
       const arrayBuffer = await file.arrayBuffer();
       
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
       
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      let fullText = '';
+      const result = {};
       
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        const pageText = textContent.items.map(item => item.str).join(' ');
-        fullText += pageText + '\n';
-      }
-      
-      return fullText;
-    }
-
-    // 자유석 텍스트 파싱 (이름-좌석번호 추출)
-    function parseFreeSeatText(text) {
-      const result = {};
-      
-      // 한글 이름 패턴 (2-4글자 + 선택적 숫자)
-      const namePattern = /[가-힣]{2,4}\d*/g;
-      // 숫자 패턴 (좌석번호: 주로 57-104 범위)
-      const numberPattern = /\b(\d{2,3})\b/g;
-      
-      // 텍스트를 라인별로 분석
-      const lines = text.split(/\s+/);
-      
-      // 숫자와 이름이 인접한 패턴 찾기
-      for (let i = 0; i < lines.length; i++) {
-        const item = lines[i].trim();
         
-        // 숫자인 경우
-        if (/^\d{2,3}$/.test(item)) {
-          const seatNum = parseInt(item);
+        // 텍스트 아이템을 좌표와 함께 추출
+        const items = textContent.items.map(item => ({
+          text: item.str.trim(),
+          x: item.transform[4],
+          y: item.transform[5]
+        })).filter(item => item.text);
+        
+        // 숫자(좌석번호)와 이름 분리
+        const numbers = items.filter(item => /^\d{2,3}$/.test(item.text) && parseInt(item.text) >= 57 && parseInt(item.text) <= 104);
+        const names = items.filter(item => /^[가-힣]{2,4}\d*$/.test(item.text));
+        
+        // 각 이름에 대해 가장 가까운 위에 있는 숫자 찾기
+        names.forEach(nameItem => {
+          let closestNumber = null;
+          let minDistance = Infinity;
           
-          // 자유석 범위 체크 (57-104)
-          if (seatNum >= 57 && seatNum <= 104) {
-            // 다음 아이템이 이름인지 확인
-            if (i + 1 < lines.length) {
-              const nextItem = lines[i + 1].trim();
-              if (/^[가-힣]{2,4}\d*$/.test(nextItem)) {
-                result[nextItem] = seatNum;
+          numbers.forEach(numItem => {
+            // 숫자가 이름 위에 있어야 함 (y좌표가 더 큼 = PDF에서 위)
+            if (numItem.y > nameItem.y) {
+              // X좌표 차이 계산 (가로 거리)
+              const xDiff = Math.abs(numItem.x - nameItem.x);
+              // Y좌표 차이 계산 (세로 거리)
+              const yDiff = numItem.y - nameItem.y;
+              
+              // 가로로 가깝고 (50 이내), 세로로 적당히 위에 있는 것 (100 이내)
+              if (xDiff < 50 && yDiff < 100) {
+                const distance = xDiff + yDiff;
+                if (distance < minDistance) {
+                  minDistance = distance;
+                  closestNumber = numItem;
+                }
               }
             }
-            // 이전 아이템이 이름인지도 확인
-            if (i > 0) {
-              const prevItem = lines[i - 1].trim();
-              if (/^[가-힣]{2,4}\d*$/.test(prevItem) && !result[prevItem]) {
-                result[prevItem] = seatNum;
-              }
-            }
+          });
+          
+          if (closestNumber) {
+            result[nameItem.text] = parseInt(closestNumber.text);
           }
-        }
-        
-        // 이름인 경우 (한글 2-4자 + 선택적 숫자)
-        if (/^[가-힣]{2,4}\d*$/.test(item)) {
-          // 다음 아이템이 숫자인지 확인
-          if (i + 1 < lines.length) {
-            const nextItem = lines[i + 1].trim();
-            if (/^\d{2,3}$/.test(nextItem)) {
-              const seatNum = parseInt(nextItem);
-              if (seatNum >= 57 && seatNum <= 104) {
-                result[item] = seatNum;
-              }
-            }
-          }
-          // 이전 아이템이 숫자인지도 확인
-          if (i > 0 && !result[item]) {
-            const prevItem = lines[i - 1].trim();
-            if (/^\d{2,3}$/.test(prevItem)) {
-              const seatNum = parseInt(prevItem);
-              if (seatNum >= 57 && seatNum <= 104) {
-                result[item] = seatNum;
-              }
-            }
-          }
-        }
+        });
       }
       
       return result;
