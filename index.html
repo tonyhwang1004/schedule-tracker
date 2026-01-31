@@ -436,20 +436,20 @@
         <div class="bg-white rounded-xl p-4 mb-4">
           <h2 class="text-lg font-bold mb-4">🏢 8층 (총 ${roster.floor8.length}명) ${attendance.floor8.present.length > 0 || attendance.floor8.exited.length > 0 ? `<span class="text-sm font-normal text-green-600">- ${attendance.floor8.present.length}명 있음 / ${attendance.floor8.exited.length}명 나감</span>` : ''}</h2>
           
+          ${renderSection('🟡 정기일정제출', data.floor8.submitted, 'yellow', attendance.floor8, 8)}
+          ${renderSection('🟢 사감승인완료', data.floor8.supervisorApproved, 'green', attendance.floor8, 8)}
+          ${renderSection('🔵 학부모승인완료', data.floor8.parentApproved, 'blue', attendance.floor8, 8)}
           ${renderSection('🔴 미제출', data.floor8.notSubmitted, 'red', attendance.floor8, 8)}
-          ${renderSection('🟡 제출단계 (학부모 승인 대기)', data.floor8.submitted, 'yellow', attendance.floor8, 8)}
-          ${renderSection('🔵 학부모 승인완료 (사감 승인 대기)', data.floor8.parentApproved, 'blue', attendance.floor8, 8)}
-          ${renderSection('🟢 사감 승인완료', data.floor8.supervisorApproved, 'green', attendance.floor8, 8)}
         </div>
 
         <!-- 7층 -->
         <div class="bg-white rounded-xl p-4">
           <h2 class="text-lg font-bold mb-4">🏢 7층 (총 ${roster.floor7.length}명) ${attendance.floor7.present.length > 0 || attendance.floor7.exited.length > 0 ? `<span class="text-sm font-normal text-green-600">- ${attendance.floor7.present.length}명 있음 / ${attendance.floor7.exited.length}명 나감</span>` : ''}</h2>
           
+          ${renderSection('🟡 정기일정제출', data.floor7.submitted, 'yellow', attendance.floor7, 7)}
+          ${renderSection('🟢 사감승인완료', data.floor7.supervisorApproved, 'green', attendance.floor7, 7)}
+          ${renderSection('🔵 학부모승인완료', data.floor7.parentApproved, 'blue', attendance.floor7, 7)}
           ${renderSection('🔴 미제출', data.floor7.notSubmitted, 'red', attendance.floor7, 7)}
-          ${renderSection('🟡 제출단계 (학부모 승인 대기)', data.floor7.submitted, 'yellow', attendance.floor7, 7)}
-          ${renderSection('🔵 학부모 승인완료 (사감 승인 대기)', data.floor7.parentApproved, 'blue', attendance.floor7, 7)}
-          ${renderSection('🟢 사감 승인완료', data.floor7.supervisorApproved, 'green', attendance.floor7, 7)}
         </div>
       `;
     }
