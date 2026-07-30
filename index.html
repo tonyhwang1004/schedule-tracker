@@ -12,8 +12,7 @@
     .seat-num { font-size: 0.7rem; color: #6b7280; margin-right: 2px; }
     .seat-focus { font-size: 0.7rem; color: #8b5cf6; margin-right: 2px; font-weight: 600; }
     .seat-free { font-size: 0.7rem; color: #f97316; margin-right: 2px; font-weight: 600; }
-    .loading { display: inline-block; width: 14px; height: 14px; border: 2px solid #f3f3f3; border-top: 2px solid #f97316; border-radius: 50%; animation: spin 1s linear infinite; }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .drop-active { outline: 3px solid #3b82f6; outline-offset: 2px; }
   </style>
 </head>
 <body class="bg-slate-100 min-h-screen p-4">
@@ -21,56 +20,27 @@
     <h1 class="text-2xl font-bold text-center mb-2">📚 정기일정 제출 현황</h1>
     <p class="text-center text-slate-500 text-sm mb-6">Google Sheets 실시간 연동</p>
 
-    <!-- 상태바 -->
     <div class="bg-white rounded-xl p-3 mb-4 flex flex-wrap items-center justify-between gap-2">
-      <div class="flex items-center gap-2">
-        <span id="status" class="text-sm text-slate-500">⏳ 로딩중...</span>
-      </div>
+      <span id="status" class="text-sm text-slate-500">⏳ 로딩중...</span>
       <button onclick="loadGoogleSheets()" class="px-3 py-1 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600">🔄 새로고침</button>
     </div>
 
-    <!-- 파일 업로드 영역 -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      <!-- 수능선배 업로드 -->
-      <label id="uploadBox" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-blue-400">
-        <div class="text-base mb-1">📁 수능선배</div>
-        <div class="text-xs text-slate-500">제출 현황</div>
-        <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadSubmission(this)">
-      </label>
-
-      <!-- 8층 출석 업로드 -->
-      <label id="upload8" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-green-400">
-        <div class="text-base mb-1">🏢 8층 출석</div>
-        <div class="text-xs text-slate-500">출입 기록</div>
-        <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadAttendance(this, 8)">
-      </label>
-
-      <!-- 7층 출석 업로드 -->
-      <label id="upload7" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-green-400">
-        <div class="text-base mb-1">🏢 7층 출석</div>
-        <div class="text-xs text-slate-500">출입 기록</div>
-        <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadAttendance(this, 7)">
-      </label>
-
-      <!-- 집중실 좌석 업로드 -->
-      <label id="uploadFocus" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-purple-400">
-        <div class="text-base mb-1">🎯 집중실</div>
-        <div class="text-xs text-slate-500">좌석 배치</div>
-        <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadFocusRoom(this)">
-      </label>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+      <label data-kind="sub"   class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-blue-400"></label>
+      <label data-kind="att8"  class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-green-400"></label>
+      <label data-kind="att7"  class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-green-400"></label>
+      <label data-kind="focus" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-purple-400"></label>
     </div>
 
-    <!-- 자유석 좌석 업로드 (엑셀) -->
-    <div class="mb-6">
-      <label id="uploadFree" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-orange-400">
-        <div class="text-base mb-1">🪑 자유석 배치</div>
-        <div class="text-xs text-slate-500">엑셀 업로드 (이름, 좌석번호)</div>
-        <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadFreeSeat(this)">
-      </label>
+    <div class="mb-3">
+      <label data-kind="free" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-orange-400"></label>
       <div id="freeSeatResult" class="mt-2"></div>
     </div>
 
-    <!-- 범례 -->
+    <p class="text-xs text-slate-400 text-center mb-4">xlsx · xlsm · xlsb · xls · ods · csv · tsv · txt 모두 지원 (한글 CSV 인코딩 자동 판별) · 드래그 앤 드롭 가능</p>
+
+    <div id="diag" class="mb-4"></div>
+
     <div class="flex flex-wrap items-center gap-4 mb-4 text-sm text-slate-600">
       <span class="flex items-center gap-1"><span class="w-4 h-4 rounded border-2 border-green-500 bg-green-100"></span> 현재 있음</span>
       <span class="flex items-center gap-1"><span class="text-gray-400 text-xs">나감</span> = 퇴실</span>
@@ -79,447 +49,709 @@
       <span class="flex items-center gap-1"><span class="text-purple-500 text-xs font-bold">[집중N]</span> = 집중실</span>
     </div>
 
-    <!-- 결과 -->
     <div id="result"></div>
   </div>
 
   <script>
-    // 설정
-    const SPREADSHEET_ID = '1OVEffnCRTZ1A-cVCb4CYiYe3MicyI9TSkJNsau4mGVo';
-    const SHEET_GIDS = { floor7: '141026233', floor8: '910829726' };
+  /* ================= 설정 ================= */
+  const SPREADSHEET_ID = '1OVEffnCRTZ1A-cVCb4CYiYe3MicyI9TSkJNsau4mGVo';
+  const SHEET_GIDS = { floor7: '141026233', floor8: '910829726' };
+  const ACCEPT = '.csv,.tsv,.txt,.xlsx,.xlsm,.xlsb,.xls,.ods';
 
-    // 데이터
-    let roster = { floor7: [], floor8: [] };
-    let seatMap = { floor7: {}, floor8: {} }; // Google Sheets에서 로드
-    let focusRoomSeats = {}; // 집중실 좌석 (엑셀에서 로드)
-    let freeSeatMap = {}; // 자유석 좌석 (PDF 분석 데이터)
-    let freeSeatImage = null; // 자유석 이미지
-    let submission = { submitted: [], parentApproved: [], supervisorApproved: [] };
-    let attendance = { floor7: { present: [], exited: [] }, floor8: { present: [], exited: [] } };
-    let copiedText = '';
+  /* ================= 상태 ================= */
+  let roster = { floor7: [], floor8: [] };
+  let seatMap = { floor7: {}, floor8: {} };
+  let focusRoomSeats = {};
+  let freeSeatMap = {};
+  let submission = { submitted: [], parentApproved: [], supervisorApproved: [] };
+  let attendance = { floor7: { present: [], exited: [] }, floor8: { present: [], exited: [] } };
+  let attRaw = { 7: null, 8: null };
+  let attNewestFirst = { 7: false, 8: false };
+  let diag = {};              // kind -> 진단 정보
+  let copiedText = '';
 
-    // 자유석 초기 데이터 (PDF 업로드 시 자동 분석됨)
-    freeSeatMap = {};
+  const BOXES = {
+    sub:   { icon: '📁', title: '수능선배',    hint: '제출 현황',      accent: 'blue' },
+    att8:  { icon: '🏢', title: '8층 출석',    hint: '출입 기록',      accent: 'green' },
+    att7:  { icon: '🏢', title: '7층 출석',    hint: '출입 기록',      accent: 'green' },
+    focus: { icon: '🎯', title: '집중실',      hint: '좌석 배치',      accent: 'purple' },
+    free:  { icon: '🪑', title: '자유석 배치', hint: '이름 + 좌석번호', accent: 'orange' }
+  };
 
-    // 좌석번호 가져오기
-    function getSeatNumber(name, floor) {
-      // 집중실 먼저 체크 (엑셀에서 로드된 데이터만)
-      if (focusRoomSeats[name]) {
-        return '집중' + focusRoomSeats[name];
-      }
-      // 자유석 체크 (8층, 엑셀에서 로드된 데이터)
-      if (floor === 8 && freeSeatMap[name]) {
-        return freeSeatMap[name];
-      }
-      // Google Sheets 데이터 (지정석만)
-      const map = floor === 7 ? seatMap.floor7 : seatMap.floor8;
-      const seatNum = map[name];
-      
-      // 유효하지 않은 값 필터링
-      if (!seatNum) return null;
-      
-      // 숫자가 아니면 무시 (집중실 전화번호 등 문자열)
-      if (typeof seatNum !== 'number') return null;
-      
-      // 100 초과는 무시 (잘못된 값)
-      if (seatNum > 100) return null;
-      
-      return seatNum;
-    }
+  /* ============================================================
+     1. 범용 파일 리더 — 확장자·인코딩 상관없이 워크북으로 변환
+     ============================================================ */
 
-    // 집중실 엑셀 로드 - 간단한 번호로 표시
-    function loadFocusRoom(input) {
-      const file = input.files[0];
-      if (!file) return;
+  // 앞부분 시그니처로 바이너리(엑셀) 여부 판별
+  function looksBinary(bytes) {
+    if (bytes.length < 4) return false;
+    const [a, b, c, d] = bytes;
+    if (a === 0x50 && b === 0x4b) return true;                         // PK.. → xlsx/xlsm/xlsb/ods (zip)
+    if (a === 0xd0 && b === 0xcf && c === 0x11 && d === 0xe0) return true; // OLE → xls
+    if (a === 0x09 && (b === 0x00 || b === 0x02 || b === 0x04)) return true; // BIFF2-5 xls
+    // NUL 바이트가 섞여 있으면(UTF-16 제외) 바이너리로 간주
+    return false;
+  }
 
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const wb = XLSX.read(e.target.result, { type: 'array' });
-        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
-        
-        focusRoomSeats = {};
-        
-        // 헤더 스킵하고 데이터 파싱
-        for (let i = 1; i < data.length; i++) {
-          const row = data[i];
-          if (!row || row.length < 2) continue;
-          
-          // A열: 이름, B열: 좌석번호
-          const name = (row[0] || '').toString().trim();
-          const seat = (row[1] || '').toString().trim();
-          
-          if (name && /^[가-힣]{2,4}$/.test(name) && seat) {
-            const seatNum = seat.match(/\d+/);
-            if (seatNum) {
-              // 간단하게 1, 2, 3... 으로 저장
-              focusRoomSeats[name] = parseInt(seatNum[0]);
-            }
-          }
-        }
+  // 텍스트 디코딩: BOM → UTF-8 → EUC-KR(CP949) 순으로 시도
+  function decodeText(bytes) {
+    if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf)
+      return { text: new TextDecoder('utf-8').decode(bytes.subarray(3)), encoding: 'UTF-8 (BOM)' };
+    if (bytes[0] === 0xff && bytes[1] === 0xfe)
+      return { text: new TextDecoder('utf-16le').decode(bytes), encoding: 'UTF-16LE' };
+    if (bytes[0] === 0xfe && bytes[1] === 0xff)
+      return { text: new TextDecoder('utf-16be').decode(bytes), encoding: 'UTF-16BE' };
 
-        const count = Object.keys(focusRoomSeats).length;
-        document.getElementById('uploadFocus').className = 'block p-3 border-2 border-purple-400 rounded-xl cursor-pointer text-center bg-purple-50';
-        document.getElementById('uploadFocus').innerHTML = `
-          <div class="text-base mb-1">✅ 집중실</div>
-          <div class="text-xs text-purple-600">${count}명 배치</div>
-          <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadFocusRoom(this)">
-        `;
-        
-        render();
-      };
-      reader.readAsArrayBuffer(file);
-    }
+    let utf8 = null;
+    try {
+      utf8 = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch (e) { /* UTF-8 아님 */ }
 
-    // 자유석 엑셀 업로드
-    function loadFreeSeat(input) {
-      const file = input.files[0];
-      if (!file) return;
+    if (utf8 !== null && !utf8.includes('\ufffd')) return { text: utf8, encoding: 'UTF-8' };
 
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const wb = XLSX.read(e.target.result, { type: 'array' });
-        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-        
-        freeSeatMap = {};
-        
-        data.forEach(row => {
-          const name = (row['이름'] || '').toString().trim();
-          const seat = parseInt(row['좌석번호']);
-          
-          if (name && seat && seat >= 57 && seat <= 104) {
-            freeSeatMap[name] = seat;
-          }
-        });
-
-        const count = Object.keys(freeSeatMap).length;
-        
-        document.getElementById('uploadFree').className = 'block p-3 border-2 border-orange-400 rounded-xl cursor-pointer text-center bg-orange-50';
-        document.getElementById('uploadFree').innerHTML = `
-          <div class="text-base mb-1">✅ 자유석 배치</div>
-          <div class="text-xs text-orange-600">${count}명 로드 완료</div>
-          <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadFreeSeat(this)">
-        `;
-        
-        // 결과 미리보기
-        if (count > 0) {
-          document.getElementById('freeSeatResult').innerHTML = `
-            <div class="bg-orange-50 rounded-lg p-3 text-sm">
-              <div class="font-bold mb-2 text-orange-700">🪑 자유석 (${count}명)</div>
-              <div class="flex flex-wrap gap-2">
-                ${Object.entries(freeSeatMap).sort((a,b) => a[1] - b[1]).map(([name, seat]) => 
-                  `<span class="px-2 py-1 bg-white rounded border text-xs">[${seat}] ${name}</span>`
-                ).join('')}
-              </div>
-            </div>
-          `;
-        }
-        
-        render();
-      };
-      reader.readAsArrayBuffer(file);
-    }
-
-    // Google Sheets에서 데이터 가져오기 (이름 + 좌석번호)
-    async function loadGoogleSheets() {
-      document.getElementById('status').textContent = '⏳ 로딩중...';
-      
+    for (const label of ['euc-kr', 'windows-949', 'iso-8859-1']) {
       try {
-        // 7층 데이터
-        const res7 = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GIDS.floor7}`);
-        const csv7 = await res7.text();
-        const data7 = parseNamesAndSeats(csv7);
-        roster.floor7 = data7.names;
-        seatMap.floor7 = data7.seats;
+        const t = new TextDecoder(label).decode(bytes);
+        if (!t.includes('\ufffd')) return { text: t, encoding: label.toUpperCase() };
+      } catch (e) { /* 미지원 라벨 */ }
+    }
+    return { text: utf8 !== null ? utf8 : new TextDecoder('utf-8').decode(bytes), encoding: 'UTF-8 (일부 깨짐)' };
+  }
 
-        // 8층 데이터
-        const res8 = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GIDS.floor8}`);
-        const csv8 = await res8.text();
-        const data8 = parseNamesAndSeats(csv8);
-        roster.floor8 = data8.names;
-        seatMap.floor8 = data8.seats;
+  // 구분자 추정 (쉼표 / 탭 / 세미콜론 / 파이프)
+  function guessDelimiter(text) {
+    const sample = text.split(/\r?\n/).slice(0, 20).join('\n');
+    const cand = [',', '\t', ';', '|'];
+    let best = ',', bestCount = -1;
+    cand.forEach(ch => {
+      const n = sample.split(ch).length - 1;
+      if (n > bestCount) { bestCount = n; best = ch; }
+    });
+    return best;
+  }
 
-        const now = new Date().toLocaleTimeString('ko-KR');
-        document.getElementById('status').innerHTML = `✅ 7층 ${roster.floor7.length}명, 8층 ${roster.floor8.length}명 <span class="text-slate-400 text-xs">(${now})</span>`;
-        
-        render();
-      } catch(e) {
-        document.getElementById('status').textContent = '❌ 로드 실패: ' + e.message;
-      }
+  // file → { workbook, info }
+  async function readAnyFile(file) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const textExt = ['csv', 'tsv', 'txt', 'psv', 'prn', 'xml', 'html', 'htm'].includes(ext);
+
+    if (!textExt && looksBinary(bytes)) {
+      return {
+        workbook: XLSX.read(bytes, { type: 'array', cellDates: true, cellNF: false }),
+        info: { format: ext ? ext.toUpperCase() : '엑셀', encoding: '바이너리' }
+      };
     }
 
-    // CSV에서 이름(A열)과 좌석번호(E열) 추출
-    function parseNamesAndSeats(csv) {
-      const lines = csv.split('\n');
-      const names = [];
-      const seats = {};
-      
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line.trim()) continue;
-        
-        // CSV 파싱
-        const cols = parseCSVRow(line);
-        const name = (cols[0] || '').replace(/"/g, '').trim();
-        const seatRaw = (cols[4] || '').replace(/"/g, '').trim(); // E열 (인덱스 4)
-        
-        // 유효한 이름인지 확인
-        if (name && /^[가-힣]{2,4}$/.test(name) && !name.includes('학생') && !name.includes('이름')) {
-          names.push(name);
-          
-          // 좌석번호 추출 - 지정석만 (집중실, 자유석 제외)
-          // "집중"으로 시작하면 무시 (집중실은 별도 엑셀로 관리)
-          if (seatRaw.startsWith('집중')) {
-            // 집중실은 무시 - 별도 엑셀 업로드로 관리
-            continue;
-          }
-          
-          const seatMatch = seatRaw.match(/^(\d+)/);
-          if (seatMatch) {
-            const seatNum = parseInt(seatMatch[1]);
-            // 8층 지정석(1-56)만 저장, 자유석(57+)은 PDF에서 가져옴
-            if (seatNum >= 1 && seatNum <= 56) {
-              seats[name] = seatNum;
-            }
-          }
-        }
+    const { text, encoding } = decodeText(bytes);
+    const FS = guessDelimiter(text);
+    return {
+      workbook: XLSX.read(text, { type: 'string', cellDates: true, FS }),
+      info: {
+        format: (ext || 'TEXT').toUpperCase(),
+        encoding,
+        delimiter: FS === '\t' ? 'TAB' : FS
       }
-      
-      return { names, seats };
+    };
+  }
+
+  // 시트 → 2차원 배열
+  function sheetRows(sheet) {
+    return XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '', cellDates: true });
+  }
+
+  /* ============================================================
+     2. 공통 파서 유틸 — 헤더 위치·열 이름을 유연하게 탐색
+     ============================================================ */
+
+  function normHeader(v) {
+    return (v == null ? '' : v.toString()).replace(/[\s\u00a0_\-.()[\]]/g, '').toLowerCase();
+  }
+  function normName(v) {
+    return (v == null ? '' : v.toString())
+      .replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '')
+      .replace(/[\s\u00a0]/g, '').replace(/[0-9]/g, '').trim();
+  }
+  function isPersonName(v) {
+    const s = normName(v);
+    return /^[가-힣]{2,5}$/.test(s) || /^[A-Za-z]{2,20}$/.test(s);
+  }
+
+  const KEYS = {
+    name:   ['이름', '성명', '회원명', '학생명', '사용자', '사용자명', '이용자', '이용자명', '대상자', '대상자명', 'name', 'username', 'student'],
+    dir:    ['방향', '출입방향', '입출구분', '출입구분', '입출력', '구분', '출입', '유형', '인증구분', '출입유형', 'direction', 'inout', 'type', 'gubun'],
+    time:   ['시간', '일시', '시각', '출입시간', '인증시간', '등록일', '등록일시', '발생일', '발생일시', 'datetime', 'time', 'date', 'timestamp'],
+    status: ['승인상태', '상태', '진행상태', '승인', '처리상태', 'status'],
+    seat:   ['좌석번호', '좌석', '자리', '자리번호', '번호', '석번호', 'seat', 'seatno']
+  };
+
+  // rows 안에서 필요한 열들을 찾는다. required 전부 찾으면 성공.
+  function findHeader(rows, required, optional = [], maxScan = 25) {
+    for (let i = 0; i < Math.min(rows.length, maxScan); i++) {
+      const r = rows[i] || [];
+      const cols = {};
+      let ok = true;
+      for (const field of required) {
+        const idx = r.findIndex(c => KEYS[field].includes(normHeader(c)));
+        if (idx === -1) { ok = false; break; }
+        cols[field] = idx;
+      }
+      if (!ok) continue;
+      for (const field of optional) {
+        const idx = r.findIndex(c => KEYS[field].some(k => normHeader(c).includes(k)));
+        if (idx !== -1) cols[field] = idx;
+      }
+      return { headerRow: i, cols };
+    }
+    return null;
+  }
+
+  // 워크북의 모든 시트를 시도해서 가장 많이 뽑히는 시트를 채택
+  function bestSheet(workbook, parseFn) {
+    let best = null;
+    workbook.SheetNames.forEach(sn => {
+      let r;
+      try { r = parseFn(sheetRows(workbook.Sheets[sn]), sn); } catch (e) { return; }
+      if (r && (!best || r.count > best.count)) best = r;
+    });
+    return best;
+  }
+
+  /* ============================================================
+     3. 출석(출입 기록)
+     ============================================================ */
+
+  // allowNumeric: 방향 열이 헤더로 확인된 경우에만 1/2 같은 코드값을 허용 (사번 등 오인 방지)
+  function parseDirection(v, allowNumeric = false) {
+    const s = normHeader(v);
+    if (!s) return null;
+    if (/^(out|o|퇴|x)$/.test(s) || /(exit|out|퇴실|퇴장|퇴근|출구|나감|하원|외출|귀가)/.test(s)) return 'EXIT';
+    if (/^(in|i|입)$/.test(s) || /(enter|entry|입실|입장|출근|입구|등원|들어)/.test(s)) return 'ENTER';
+    if (allowNumeric) {
+      if (s === '1') return 'ENTER';
+      if (s === '2' || s === '0') return 'EXIT';
+    }
+    return null;
+  }
+
+  // 날짜/시각 문자열을 최대한 폭넓게 해석 (한글 오전·오후, 점·슬래시 구분자, 시간만 있는 값 포함)
+  function parseTime(v) {
+    if (v == null || v === '') return null;
+    if (v instanceof Date) return isNaN(v) ? null : v.getTime();
+
+    let s;
+    if (typeof v === 'number') {
+      if (v >= 19000101 && v <= 29991231 && Number.isInteger(v)) s = String(v);  // 20260730 형태
+      else return Math.round((v - 25569) * 86400000);                            // 엑셀 시리얼
+    } else {
+      s = v.toString().trim();
+    }
+    if (!s) return null;
+
+    const isPM = /(오후|PM|p\.?m\.?)/i.test(s);
+    const isAM = /(오전|AM|a\.?m\.?)/i.test(s);
+
+    let y, mo, d;
+    let m = s.match(/(\d{4})\s*[-/.년]\s*(\d{1,2})\s*[-/.월]\s*(\d{1,2})/);           // 2026-07-30
+    if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+    if (!m) {
+      m = s.match(/(\d{1,2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{4})/);               // 07/30/2026
+      if (m) { y = +m[3]; mo = +m[1]; d = +m[2]; }
+    }
+    if (!m) {
+      m = s.match(/(?:^|\D)(\d{4})(\d{2})(\d{2})(?:\D|$)/);                          // 20260730
+      if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
     }
 
-    // CSV 행 파싱 (따옴표 처리)
-    function parseCSVRow(line) {
-      const result = [];
-      let current = '';
-      let inQuotes = false;
-      
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') inQuotes = !inQuotes;
-        else if (char === ',' && !inQuotes) {
-          result.push(current.trim());
-          current = '';
-        } else {
-          current += char;
-        }
-      }
-      result.push(current.trim());
-      return result;
+    let t = s.match(/(\d{1,2})\s*[:시]\s*(\d{1,2})(?:\s*[:분]\s*(\d{1,2}))?/);
+    if (!t) {
+      // 174043 / 1740 처럼 구분자 없는 시각
+      const rest = m ? s.replace(m[0], ' ') : s;
+      const ct = rest.match(/(?:^|\D)([01]\d|2[0-3])([0-5]\d)([0-5]\d)?(?:\D|$)/);
+      if (ct) t = ct;
     }
+    let h = t ? +t[1] : 0;
+    const mi = t && t[2] != null ? +t[2] : 0;
+    const sec = t && t[3] != null ? +t[3] : 0;
+    if (isPM && h < 12) h += 12;
+    if (isAM && h === 12) h = 0;
 
-    // 수능선배.xlsx 파일 로드
-    function loadSubmission(input) {
-      const file = input.files[0];
-      if (!file) return;
+    if (m) {
+      if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+      const dt = new Date(y, mo - 1, d, h, mi, sec);
+      return isNaN(dt) ? null : dt.getTime();
+    }
+    if (t) return ((h * 60 + mi) * 60 + sec) * 1000;   // 시각만 있는 값 (같은 날 기준 정렬용)
+    return null;
+  }
 
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const wb = XLSX.read(e.target.result, { type: 'array' });
-        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-        
-        submission = { submitted: [], parentApproved: [], supervisorApproved: [] };
-        
-        data.forEach(row => {
-          const name = row['이름']?.toString().trim();
-          const status = row['승인상태']?.toString().trim();
-          if (!name || !status) return;
-          
-          if (status === '제출 단계') submission.submitted.push(name);
-          else if (status === '학부모 승인 완료') submission.parentApproved.push(name);
-          else if (status === '사감 승인 완료') submission.supervisorApproved.push(name);
+  function parseAttendanceRows(rows, sheetName) {
+    const out = { sheetName, headerRow: -1, cols: {}, records: [], dirValues: [], count: 0, totalRows: rows.length, firstRows: rows.slice(0, 3) };
+    if (!rows.length) return out;
+
+    const found = findHeader(rows, ['name', 'dir'], ['time']);
+    if (found) {
+      out.headerRow = found.headerRow;
+      out.cols = found.cols;
+    } else {
+      // 헤더가 없는 파일: 값 패턴으로 열 추론
+      const scan = rows.slice(0, Math.min(rows.length, 80));
+      const width = Math.max(...scan.map(r => (r || []).length), 0);
+      let nameCol = -1, nameHit = 0, dirCol = -1, dirHit = 0;
+      for (let c = 0; c < width; c++) {
+        let n = 0, d = 0;
+        scan.forEach(r => {
+          const v = (r || [])[c];
+          if (isPersonName(v)) n++;
+          if (parseDirection(v, false)) d++;
         });
-
-        document.getElementById('uploadBox').className = 'block p-3 border-2 border-green-400 rounded-xl cursor-pointer text-center bg-green-50';
-        document.getElementById('uploadBox').innerHTML = `
-          <div class="text-base mb-1">✅ 수능선배.xlsx</div>
-          <div class="text-xs text-slate-500">${submission.submitted.length + submission.parentApproved.length + submission.supervisorApproved.length}명 제출</div>
-          <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadSubmission(this)">
-        `;
-        
-        render();
-      };
-      reader.readAsArrayBuffer(file);
-    }
-
-    // 출석 파일 로드
-    function loadAttendance(input, floor) {
-      const file = input.files[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const wb = XLSX.read(e.target.result, { type: 'array' });
-        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-        
-        const lastRecord = {};
-        data.forEach(row => {
-          const name = row['이름']?.toString().trim();
-          const direction = row['방향']?.toString().trim();
-          if (name && direction && !lastRecord[name]) {
-            lastRecord[name] = direction;
-          }
-        });
-        
-        const presentStudents = Object.keys(lastRecord).filter(name => lastRecord[name] === 'ENTER');
-        const exitedStudents = Object.keys(lastRecord).filter(name => lastRecord[name] === 'EXIT');
-        
-        if (floor === 7) {
-          attendance.floor7 = { present: presentStudents, exited: exitedStudents };
-          document.getElementById('upload7').className = 'block p-3 border-2 border-green-400 rounded-xl cursor-pointer text-center bg-green-50';
-          document.getElementById('upload7').innerHTML = `
-            <div class="text-base mb-1">✅ 7층 출석</div>
-            <div class="text-xs text-slate-500">${presentStudents.length}명 있음 / ${exitedStudents.length}명 나감</div>
-            <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadAttendance(this, 7)">
-          `;
-        } else {
-          attendance.floor8 = { present: presentStudents, exited: exitedStudents };
-          document.getElementById('upload8').className = 'block p-3 border-2 border-green-400 rounded-xl cursor-pointer text-center bg-green-50';
-          document.getElementById('upload8').innerHTML = `
-            <div class="text-base mb-1">✅ 8층 출석</div>
-            <div class="text-xs text-slate-500">${presentStudents.length}명 있음 / ${exitedStudents.length}명 나감</div>
-            <input type="file" accept=".xlsx,.xls" class="hidden" onchange="loadAttendance(this, 8)">
-          `;
-        }
-        
-        render();
-      };
-      reader.readAsArrayBuffer(file);
-    }
-
-    // 이름 복사
-    function copyName(name) {
-      navigator.clipboard.writeText(name);
-      copiedText = name;
-      render();
-      setTimeout(() => { copiedText = ''; render(); }, 1500);
-    }
-
-    // 전체 이름 복사
-    function copyAll(names) {
-      navigator.clipboard.writeText(names.join('\n'));
-      alert(`${names.length}명 이름 복사 완료!`);
-    }
-
-    // 화면 렌더링
-    function render() {
-      const resultDiv = document.getElementById('result');
-      
-      if (roster.floor7.length === 0 && roster.floor8.length === 0) {
-        resultDiv.innerHTML = '';
-        return;
+        if (n > nameHit) { nameHit = n; nameCol = c; }
+        if (d > dirHit) { dirHit = d; dirCol = c; }
       }
-
-      if (submission.submitted.length === 0 && submission.parentApproved.length === 0 && submission.supervisorApproved.length === 0) {
-        resultDiv.innerHTML = '<div class="bg-white rounded-xl p-8 text-center text-slate-400">수능선배.xlsx 파일을 업로드하세요</div>';
-        return;
+      // 방향값은 이름이 있는 행마다 붙어야 정상 — 비율이 낮으면 방향 열이 아니라고 본다
+      if (nameHit < 2 || dirHit < 2 || nameCol === dirCol || dirHit < nameHit * 0.6) return out;
+      out.headerRow = -2;
+      out.cols = { name: nameCol, dir: dirCol };
+      for (let c = 0; c < width; c++) {
+        if (c === nameCol || c === dirCol) continue;
+        if (scan.filter(r => parseTime((r || [])[c])).length >= 2) { out.cols.time = c; break; }
       }
-
-      const allSubmitted = new Set([...submission.submitted, ...submission.parentApproved, ...submission.supervisorApproved]);
-
-      const data = {
-        floor8: {
-          notSubmitted: roster.floor8.filter(n => !allSubmitted.has(n)),
-          submitted: roster.floor8.filter(n => submission.submitted.includes(n)),
-          parentApproved: roster.floor8.filter(n => submission.parentApproved.includes(n)),
-          supervisorApproved: roster.floor8.filter(n => submission.supervisorApproved.includes(n))
-        },
-        floor7: {
-          notSubmitted: roster.floor7.filter(n => !allSubmitted.has(n)),
-          submitted: roster.floor7.filter(n => submission.submitted.includes(n)),
-          parentApproved: roster.floor7.filter(n => submission.parentApproved.includes(n)),
-          supervisorApproved: roster.floor7.filter(n => submission.supervisorApproved.includes(n))
-        }
-      };
-
-      resultDiv.innerHTML = `
-        <!-- 8층 -->
-        <div class="bg-white rounded-xl p-4 mb-4">
-          <h2 class="text-lg font-bold mb-4">🏢 8층 (총 ${roster.floor8.length}명) ${attendance.floor8.present.length > 0 || attendance.floor8.exited.length > 0 ? `<span class="text-sm font-normal text-green-600">- ${attendance.floor8.present.length}명 있음 / ${attendance.floor8.exited.length}명 나감</span>` : ''}</h2>
-          
-          ${renderSection('🟡 정기일정제출', data.floor8.submitted, 'yellow', attendance.floor8, 8)}
-          ${renderSection('🟢 사감승인완료', data.floor8.supervisorApproved, 'green', attendance.floor8, 8)}
-          ${renderSection('🔵 학부모승인완료', data.floor8.parentApproved, 'blue', attendance.floor8, 8)}
-          ${renderSection('🔴 미제출', data.floor8.notSubmitted, 'red', attendance.floor8, 8)}
-        </div>
-
-        <!-- 7층 -->
-        <div class="bg-white rounded-xl p-4">
-          <h2 class="text-lg font-bold mb-4">🏢 7층 (총 ${roster.floor7.length}명) ${attendance.floor7.present.length > 0 || attendance.floor7.exited.length > 0 ? `<span class="text-sm font-normal text-green-600">- ${attendance.floor7.present.length}명 있음 / ${attendance.floor7.exited.length}명 나감</span>` : ''}</h2>
-          
-          ${renderSection('🟡 정기일정제출', data.floor7.submitted, 'yellow', attendance.floor7, 7)}
-          ${renderSection('🟢 사감승인완료', data.floor7.supervisorApproved, 'green', attendance.floor7, 7)}
-          ${renderSection('🔵 학부모승인완료', data.floor7.parentApproved, 'blue', attendance.floor7, 7)}
-          ${renderSection('🔴 미제출', data.floor7.notSubmitted, 'red', attendance.floor7, 7)}
-        </div>
-      `;
     }
 
-    function renderSection(title, names, color, floorAttendance, floor) {
-      if (names.length === 0) return '';
-      
-      const colors = {
-        red: 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100',
-        yellow: 'bg-yellow-50 border-yellow-200 text-yellow-700 hover:bg-yellow-100',
-        blue: 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100',
-        green: 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'
-      };
+    const start = out.headerRow >= 0 ? out.headerRow + 1 : 0;
+    const dirSet = new Set();
+    for (let i = start; i < rows.length; i++) {
+      const r = rows[i] || [];
+      const name = normName(r[out.cols.name]);
+      if (!name || !isPersonName(name)) continue;
+      const rawDir = r[out.cols.dir];
+      if (rawDir !== '' && rawDir != null) dirSet.add(rawDir.toString().trim());
+      const dir = parseDirection(rawDir, out.headerRow >= 0);
+      if (!dir) continue;
+      out.records.push({ name, dir, time: out.cols.time != null ? parseTime(r[out.cols.time]) : null, idx: i });
+    }
+    out.dirValues = [...dirSet].slice(0, 10);
+    out.count = out.records.length;
+    return out;
+  }
 
-      // 좌석번호 순으로 정렬 (집중실은 맨 뒤로)
-      const sortedNames = [...names].sort((a, b) => {
-        const seatA = getSeatNumber(a, floor);
-        const seatB = getSeatNumber(b, floor);
-        
-        // 집중실 처리
-        const isFocusA = seatA && seatA.toString().startsWith('집중');
-        const isFocusB = seatB && seatB.toString().startsWith('집중');
-        
-        if (isFocusA && !isFocusB) return 1; // 집중실은 뒤로
-        if (!isFocusA && isFocusB) return -1;
-        if (isFocusA && isFocusB) {
-          const numA = parseInt(seatA.toString().replace('집중', '')) || 999;
-          const numB = parseInt(seatB.toString().replace('집중', '')) || 999;
-          return numA - numB;
+  function foldRecords(records, newestFirst) {
+    const hasTime = records.some(r => r.time != null);
+    const sorted = [...records];
+    if (hasTime) sorted.sort((a, b) => (a.time ?? -Infinity) - (b.time ?? -Infinity) || a.idx - b.idx);
+    else sorted.sort((a, b) => newestFirst ? b.idx - a.idx : a.idx - b.idx);
+    const last = {};
+    sorted.forEach(r => { last[r.name] = r.dir; });
+    return {
+      present: Object.keys(last).filter(n => last[n] === 'ENTER'),
+      exited: Object.keys(last).filter(n => last[n] === 'EXIT'),
+      hasTime
+    };
+  }
+
+  function applyAttendance(floor) {
+    const parsed = attRaw[floor];
+    if (!parsed) return;
+    const folded = foldRecords(parsed.records, attNewestFirst[floor]);
+    attendance[floor === 7 ? 'floor7' : 'floor8'] = { present: folded.present, exited: folded.exited };
+
+    const kind = 'att' + floor;
+    const ok = parsed.count > 0;
+    diag[kind] = Object.assign({}, diag[kind], {
+      ok, detail: parsed, folded,
+      summary: ok
+        ? `시트 "${parsed.sheetName}" · ${parsed.headerRow >= 0 ? (parsed.headerRow + 1) + '행 헤더' : '헤더 없음(값 추론)'} · 기록 ${parsed.count}건`
+        : '이름/방향 열을 찾지 못했습니다'
+    });
+    setBox(kind, ok ? 'ok' : 'warn', ok ? `${folded.present.length}명 있음 / ${folded.exited.length}명 나감` : '열 인식 실패');
+    renderDiag();
+    render();
+  }
+
+  function toggleOrder(floor) {
+    attNewestFirst[floor] = !attNewestFirst[floor];
+    applyAttendance(floor);
+  }
+
+  /* ============================================================
+     4. 각 파일 처리
+     ============================================================ */
+
+  async function handleFile(kind, file) {
+    if (!file) return;
+    setBox(kind, 'loading', file.name);
+    try {
+      const { workbook, info } = await readAnyFile(file);
+      diag[kind] = { file: file.name, info };
+      HANDLERS[kind](workbook);
+    } catch (err) {
+      diag[kind] = { file: file.name, ok: false, summary: '파일을 열 수 없습니다: ' + err.message };
+      setBox(kind, 'warn', '읽기 실패');
+      renderDiag();
+    }
+  }
+
+  const HANDLERS = {
+    att8: wb => { attRaw[8] = bestSheet(wb, parseAttendanceRows) || { count: 0, records: [], firstRows: [] }; applyAttendance(8); },
+    att7: wb => { attRaw[7] = bestSheet(wb, parseAttendanceRows) || { count: 0, records: [], firstRows: [] }; applyAttendance(7); },
+
+    sub: wb => {
+      const parsed = bestSheet(wb, (rows, sheetName) => {
+        const found = findHeader(rows, ['name', 'status']);
+        if (!found) return { count: 0, sheetName, firstRows: rows.slice(0, 3) };
+        const res = { submitted: [], parentApproved: [], supervisorApproved: [] };
+        const statusValues = new Set();
+        for (let i = found.headerRow + 1; i < rows.length; i++) {
+          const r = rows[i] || [];
+          const name = (r[found.cols.name] ?? '').toString().trim();
+          const status = (r[found.cols.status] ?? '').toString().trim();
+          if (!name || !status) continue;
+          statusValues.add(status);
+          const s = normHeader(status);
+          if (s.includes('사감')) res.supervisorApproved.push(name);
+          else if (s.includes('학부모') || s.includes('부모')) res.parentApproved.push(name);
+          else if (s.includes('제출')) res.submitted.push(name);
         }
-        
-        const numA = parseInt(seatA) || 999;
-        const numB = parseInt(seatB) || 999;
-        return numA - numB;
+        const count = res.submitted.length + res.parentApproved.length + res.supervisorApproved.length;
+        return { count, sheetName, headerRow: found.headerRow, res, statusValues: [...statusValues].slice(0, 10), firstRows: rows.slice(0, 3) };
       });
 
-      return `
-        <div class="mb-4">
-          <div class="flex items-center justify-between mb-2">
-            <span class="text-sm font-medium">${title} (${names.length}명)</span>
-            <button onclick='copyAll(${JSON.stringify(names)})' class="text-xs text-blue-500 hover:underline">📋 전체복사</button>
-          </div>
+      if (!parsed || !parsed.count) {
+        submission = { submitted: [], parentApproved: [], supervisorApproved: [] };
+        diag.sub = Object.assign({}, diag.sub, { ok: false, summary: '이름/승인상태 열을 찾지 못했습니다', detail: parsed });
+        setBox('sub', 'warn', '열 인식 실패');
+      } else {
+        submission = parsed.res;
+        diag.sub = Object.assign({}, diag.sub, {
+          ok: true, detail: parsed,
+          summary: `시트 "${parsed.sheetName}" · ${parsed.headerRow + 1}행 헤더 · ${parsed.count}명 · 상태값 ${parsed.statusValues.join(', ')}`
+        });
+        setBox('sub', 'ok', `${parsed.count}명 제출`);
+      }
+      renderDiag(); render();
+    },
+
+    focus: wb => {
+      const parsed = bestSheet(wb, (rows, sheetName) => parseNameSeat(rows, sheetName, null));
+      focusRoomSeats = {};
+      if (parsed && parsed.count) parsed.map.forEach(({ name, seat }) => { focusRoomSeats[name] = seat; });
+      const ok = Object.keys(focusRoomSeats).length > 0;
+      diag.focus = Object.assign({}, diag.focus, {
+        ok, detail: parsed,
+        summary: ok ? `시트 "${parsed.sheetName}" · ${parsed.count}명` : '이름/좌석번호를 찾지 못했습니다'
+      });
+      setBox('focus', ok ? 'ok' : 'warn', ok ? `${Object.keys(focusRoomSeats).length}명 배치` : '열 인식 실패');
+      renderDiag(); render();
+    },
+
+    free: wb => {
+      const parsed = bestSheet(wb, (rows, sheetName) => parseNameSeat(rows, sheetName, [57, 104]));
+      freeSeatMap = {};
+      if (parsed && parsed.count) parsed.map.forEach(({ name, seat }) => { freeSeatMap[name] = seat; });
+      const count = Object.keys(freeSeatMap).length;
+      diag.free = Object.assign({}, diag.free, {
+        ok: count > 0, detail: parsed,
+        summary: count > 0
+          ? `시트 "${parsed.sheetName}" · ${count}명${parsed.skipped ? ` · 범위(57~104) 밖 ${parsed.skipped}건 제외` : ''}`
+          : '이름/좌석번호를 찾지 못했습니다'
+      });
+      setBox('free', count > 0 ? 'ok' : 'warn', count > 0 ? `${count}명 로드 완료` : '열 인식 실패');
+
+      document.getElementById('freeSeatResult').innerHTML = count > 0 ? `
+        <div class="bg-orange-50 rounded-lg p-3 text-sm">
+          <div class="font-bold mb-2 text-orange-700">🪑 자유석 (${count}명)</div>
           <div class="flex flex-wrap gap-2">
-            ${sortedNames.map(name => {
-              // 이름 매칭 (숫자 제거해서도 비교)
-              const cleanName = name.replace(/[0-9]/g, '');
-              const isPresent = floorAttendance.present.includes(name) || 
-                                floorAttendance.present.includes(cleanName) ||
-                                floorAttendance.present.some(n => n.replace(/[0-9]/g, '') === cleanName);
-              const isExited = floorAttendance.exited.includes(name) || 
-                               floorAttendance.exited.includes(cleanName) ||
-                               floorAttendance.exited.some(n => n.replace(/[0-9]/g, '') === cleanName);
-              const seatNum = getSeatNumber(name, floor);
-              const isFocusRoom = seatNum && seatNum.toString().startsWith('집중');
-              const isFreeSeat = floor === 8 && freeSeatMap[name];
-              let seatClass = 'seat-num';
-              if (isFocusRoom) seatClass = 'seat-focus';
-              else if (isFreeSeat) seatClass = 'seat-free';
-              return `
-              <span onclick="copyName('${name}')" class="px-3 py-1 rounded-lg border cursor-pointer text-sm ${colors[color]} ${isPresent ? 'present' : ''} ${copiedText === name ? 'ring-2 ring-blue-400' : ''}">
-                ${seatNum ? `<span class="${seatClass}">[${seatNum}]</span>` : ''}${name}${isExited ? ' <span class="text-gray-400 text-xs">나감</span>' : ''}${copiedText === name ? ' ✓' : ''}
-              </span>
-            `}).join('')}
+            ${Object.entries(freeSeatMap).sort((a, b) => a[1] - b[1])
+              .map(([n, s]) => `<span class="px-2 py-1 bg-white rounded border text-xs">[${s}] ${n}</span>`).join('')}
           </div>
-        </div>
-      `;
+        </div>` : '';
+      renderDiag(); render();
+    }
+  };
+
+  // 이름 + 좌석번호 형태 공통 파서 (헤더 있으면 사용, 없으면 앞의 두 열 추론)
+  function parseNameSeat(rows, sheetName, range) {
+    const out = { sheetName, count: 0, map: [], skipped: 0, firstRows: rows.slice(0, 3) };
+    if (!rows.length) return out;
+
+    let nameCol, seatCol, start;
+    const found = findHeader(rows, ['name', 'seat']);
+    if (found) {
+      nameCol = found.cols.name; seatCol = found.cols.seat; start = found.headerRow + 1;
+      out.headerRow = found.headerRow;
+    } else {
+      const scan = rows.slice(0, Math.min(rows.length, 200));
+      const width = Math.max(...scan.map(r => (r || []).length), 0);
+      let bestN = -1, hitN = 0;
+      for (let c = 0; c < width; c++) {
+        const n = scan.filter(r => isPersonName((r || [])[c])).length;
+        if (n > hitN) { hitN = n; bestN = c; }
+      }
+      if (hitN < 2) return out;
+      let bestS = -1, hitS = 0;
+      for (let c = 0; c < width; c++) {
+        if (c === bestN) continue;
+        const n = scan.filter(r => /\d/.test(((r || [])[c] ?? '').toString())).length;
+        if (n > hitS) { hitS = n; bestS = c; }
+      }
+      if (bestS === -1) return out;
+      nameCol = bestN; seatCol = bestS; start = 0;
+      out.headerRow = -2;
     }
 
-    // 초기 로드
-    loadGoogleSheets();
+    const seen = new Set();
+    for (let i = start; i < rows.length; i++) {
+      const r = rows[i] || [];
+      const name = normName(r[nameCol]);
+      if (!name || !isPersonName(name) || seen.has(name)) continue;
+      const m = (r[seatCol] ?? '').toString().match(/\d+/);
+      if (!m) continue;
+      const seat = parseInt(m[0], 10);
+      if (range && (seat < range[0] || seat > range[1])) { out.skipped++; continue; }
+      seen.add(name);
+      out.map.push({ name, seat });
+    }
+    out.count = out.map.length;
+    return out;
+  }
+
+  /* ============================================================
+     5. 업로드 박스 UI + 드래그 앤 드롭
+     ============================================================ */
+
+  const TONE = {
+    idle:    'border-dashed border-slate-300 bg-white',
+    loading: 'border-slate-400 bg-slate-50',
+    ok:      'border-green-400 bg-green-50',
+    warn:    'border-red-400 bg-red-50'
+  };
+
+  function setBox(kind, state, sub) {
+    const b = BOXES[kind];
+    const el = document.querySelector(`label[data-kind="${kind}"]`);
+    if (!el) return;
+    el.className = `block p-3 border-2 rounded-xl cursor-pointer text-center ${TONE[state]}`;
+    const icon = state === 'ok' ? '✅' : state === 'warn' ? '⚠️' : state === 'loading' ? '⏳' : b.icon;
+    const subClass = state === 'warn' ? 'text-red-600' : 'text-slate-500';
+    el.innerHTML = `
+      <div class="text-base mb-1">${icon} ${b.title}</div>
+      <div class="text-xs ${subClass} truncate">${sub ?? b.hint}</div>
+      <input type="file" accept="${ACCEPT}" class="hidden" onchange="handleFile('${kind}', this.files[0])">
+    `;
+  }
+
+  function initBoxes() {
+    Object.keys(BOXES).forEach(kind => {
+      setBox(kind, 'idle');
+      const el = document.querySelector(`label[data-kind="${kind}"]`);
+      el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drop-active'); });
+      el.addEventListener('dragleave', () => el.classList.remove('drop-active'));
+      el.addEventListener('drop', e => {
+        e.preventDefault();
+        el.classList.remove('drop-active');
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(kind, e.dataTransfer.files[0]);
+      });
+    });
+  }
+
+  /* ============================================================
+     6. 진단 패널
+     ============================================================ */
+
+  function renderDiag() {
+    const rows = Object.keys(BOXES).filter(k => diag[k]).map(kind => {
+      const d = diag[kind];
+      const b = BOXES[kind];
+      const meta = d.info ? `${d.info.format}${d.info.encoding ? ' / ' + d.info.encoding : ''}${d.info.delimiter ? ' / 구분자 ' + d.info.delimiter : ''}` : '';
+
+      if (d.ok) {
+        const att = kind.startsWith('att') ? Number(kind.slice(3)) : null;
+        const orderBtn = att && d.folded && !d.folded.hasTime
+          ? ` · 시간열 없음 → <button onclick="toggleOrder(${att})" class="text-blue-600 underline">${attNewestFirst[att] ? '최신이 위' : '최신이 아래'} (반대로)</button>`
+          : (att && d.folded && d.folded.hasTime ? ' · 시간 기준 판정' : '');
+        const dirs = att && d.detail && d.detail.dirValues && d.detail.dirValues.length
+          ? ` · 방향값 ${d.detail.dirValues.map(v => `<code class="bg-slate-100 px-1 rounded">${esc(v)}</code>`).join(' ')}` : '';
+        return `<div class="py-2 text-xs text-slate-600 border-b last:border-0">
+          <span class="font-bold">${b.title}</span>
+          <span class="text-slate-400">${esc(d.file || '')} ${meta ? '(' + meta + ')' : ''}</span><br>
+          ${d.summary || ''}${dirs}${orderBtn}
+        </div>`;
+      }
+
+      const peek = ((d.detail && d.detail.firstRows) || []).map((r, i) =>
+        `<div><span class="text-slate-400">${i + 1}행:</span> ${(r || []).map(c => `<code class="bg-white px-1 rounded border">${esc(c === '' ? '(빈칸)' : c)}</code>`).join(' ')}</div>`
+      ).join('');
+      return `<div class="py-2 text-xs text-red-700 border-b last:border-0">
+        <div class="font-bold mb-1">⚠️ ${b.title} — ${esc(d.summary || '읽기 실패')}</div>
+        <div class="text-slate-500 mb-1">${esc(d.file || '')} ${meta ? '(' + meta + ')' : ''}</div>
+        ${peek ? `<div class="mb-1">파일 상단 내용:</div><div class="space-y-1">${peek}</div>` : ''}
+      </div>`;
+    });
+    document.getElementById('diag').innerHTML = rows.length
+      ? `<div class="bg-white rounded-xl px-4 py-1">${rows.join('')}</div>` : '';
+  }
+
+  function esc(v) {
+    return (v == null ? '' : v.toString()).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  /* ============================================================
+     7. Google Sheets 명단
+     ============================================================ */
+
+  async function loadGoogleSheets() {
+    document.getElementById('status').textContent = '⏳ 로딩중...';
+    try {
+      for (const [key, gid] of [['floor7', SHEET_GIDS.floor7], ['floor8', SHEET_GIDS.floor8]]) {
+        const res = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid=${gid}`);
+        const parsed = parseNamesAndSeats(await res.text());
+        roster[key] = parsed.names;
+        seatMap[key] = parsed.seats;
+      }
+      const now = new Date().toLocaleTimeString('ko-KR');
+      document.getElementById('status').innerHTML = `✅ 7층 ${roster.floor7.length}명, 8층 ${roster.floor8.length}명 <span class="text-slate-400 text-xs">(${now})</span>`;
+      render();
+    } catch (e) {
+      document.getElementById('status').textContent = '❌ 로드 실패: ' + e.message;
+    }
+  }
+
+  function parseNamesAndSeats(csv) {
+    const names = [], seats = {};
+    csv.split('\n').forEach(line => {
+      if (!line.trim()) return;
+      const cols = parseCSVRow(line);
+      const name = (cols[0] || '').replace(/"/g, '').trim();
+      const seatRaw = (cols[4] || '').replace(/"/g, '').trim();
+      if (name && /^[가-힣]{2,4}$/.test(name) && !name.includes('학생') && !name.includes('이름')) {
+        names.push(name);
+        if (seatRaw.startsWith('집중')) return;
+        const m = seatRaw.match(/^(\d+)/);
+        if (m) {
+          const n = parseInt(m[1], 10);
+          if (n >= 1 && n <= 56) seats[name] = n;
+        }
+      }
+    });
+    return { names, seats };
+  }
+
+  function parseCSVRow(line) {
+    const result = [];
+    let current = '', inQuotes = false;
+    for (const char of line) {
+      if (char === '"') inQuotes = !inQuotes;
+      else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+      else current += char;
+    }
+    result.push(current.trim());
+    return result;
+  }
+
+  /* ============================================================
+     8. 렌더링
+     ============================================================ */
+
+  function getSeatNumber(name, floor) {
+    if (focusRoomSeats[name]) return '집중' + focusRoomSeats[name];
+    if (floor === 8 && freeSeatMap[name]) return freeSeatMap[name];
+    const map = floor === 7 ? seatMap.floor7 : seatMap.floor8;
+    const seatNum = map[name];
+    if (!seatNum || typeof seatNum !== 'number' || seatNum > 100) return null;
+    return seatNum;
+  }
+
+  function copyName(name) {
+    navigator.clipboard.writeText(name);
+    copiedText = name;
+    render();
+    setTimeout(() => { copiedText = ''; render(); }, 1500);
+  }
+  function copyAll(names) {
+    navigator.clipboard.writeText(names.join('\n'));
+    alert(`${names.length}명 이름 복사 완료!`);
+  }
+
+  function render() {
+    const resultDiv = document.getElementById('result');
+    if (roster.floor7.length === 0 && roster.floor8.length === 0) { resultDiv.innerHTML = ''; return; }
+
+    const total = submission.submitted.length + submission.parentApproved.length + submission.supervisorApproved.length;
+    if (total === 0) {
+      resultDiv.innerHTML = '<div class="bg-white rounded-xl p-8 text-center text-slate-400">수능선배 제출 현황 파일을 업로드하세요</div>';
+      return;
+    }
+
+    const all = new Set([...submission.submitted, ...submission.parentApproved, ...submission.supervisorApproved]);
+    const bucket = floorKey => ({
+      notSubmitted: roster[floorKey].filter(n => !all.has(n)),
+      submitted: roster[floorKey].filter(n => submission.submitted.includes(n)),
+      parentApproved: roster[floorKey].filter(n => submission.parentApproved.includes(n)),
+      supervisorApproved: roster[floorKey].filter(n => submission.supervisorApproved.includes(n))
+    });
+    const d8 = bucket('floor8'), d7 = bucket('floor7');
+
+    const head = (floor, count, att) => `🏢 ${floor}층 (총 ${count}명)` + (att.present.length || att.exited.length
+      ? ` <span class="text-sm font-normal text-green-600">- ${att.present.length}명 있음 / ${att.exited.length}명 나감</span>` : '');
+
+    const block = (floor, data, att) => `
+      <h2 class="text-lg font-bold mb-4">${head(floor, roster['floor' + floor].length, att)}</h2>
+      ${renderSection('🟡 정기일정제출', data.submitted, 'yellow', att, floor)}
+      ${renderSection('🟢 사감승인완료', data.supervisorApproved, 'green', att, floor)}
+      ${renderSection('🔵 학부모승인완료', data.parentApproved, 'blue', att, floor)}
+      ${renderSection('🔴 미제출', data.notSubmitted, 'red', att, floor)}`;
+
+    resultDiv.innerHTML = `
+      <div class="bg-white rounded-xl p-4 mb-4">${block(8, d8, attendance.floor8)}</div>
+      <div class="bg-white rounded-xl p-4">${block(7, d7, attendance.floor7)}</div>`;
+  }
+
+  function renderSection(title, names, color, att, floor) {
+    if (!names.length) return '';
+    const colors = {
+      red: 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100',
+      yellow: 'bg-yellow-50 border-yellow-200 text-yellow-700 hover:bg-yellow-100',
+      blue: 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100',
+      green: 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'
+    };
+    const presentSet = new Set(att.present.map(normName));
+    const exitedSet = new Set(att.exited.map(normName));
+
+    const sorted = [...names].sort((a, b) => {
+      const sa = getSeatNumber(a, floor), sb = getSeatNumber(b, floor);
+      const fa = sa && sa.toString().startsWith('집중'), fb = sb && sb.toString().startsWith('집중');
+      if (fa && !fb) return 1;
+      if (!fa && fb) return -1;
+      if (fa && fb) return (parseInt(sa.toString().replace('집중', '')) || 999) - (parseInt(sb.toString().replace('집중', '')) || 999);
+      return (parseInt(sa) || 999) - (parseInt(sb) || 999);
+    });
+
+    return `
+      <div class="mb-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-medium">${title} (${names.length}명)</span>
+          <button onclick='copyAll(${JSON.stringify(names)})' class="text-xs text-blue-500 hover:underline">📋 전체복사</button>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          ${sorted.map(name => {
+            const key = normName(name);
+            const isPresent = presentSet.has(key);
+            const isExited = !isPresent && exitedSet.has(key);
+            const seatNum = getSeatNumber(name, floor);
+            const isFocus = seatNum && seatNum.toString().startsWith('집중');
+            const isFree = floor === 8 && freeSeatMap[name];
+            const seatClass = isFocus ? 'seat-focus' : isFree ? 'seat-free' : 'seat-num';
+            return `<span onclick="copyName('${name}')" class="px-3 py-1 rounded-lg border cursor-pointer text-sm ${colors[color]} ${isPresent ? 'present' : ''} ${copiedText === name ? 'ring-2 ring-blue-400' : ''}">
+              ${seatNum ? `<span class="${seatClass}">[${seatNum}]</span>` : ''}${name}${isExited ? ' <span class="text-gray-400 text-xs">나감</span>' : ''}${copiedText === name ? ' ✓' : ''}
+            </span>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }
+
+  /* ================= 시작 ================= */
+  initBoxes();
+  loadGoogleSheets();
   </script>
 </body>
 </html>
