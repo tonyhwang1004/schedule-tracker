@@ -13,6 +13,7 @@
     .seat-focus { font-size: 0.7rem; color: #8b5cf6; margin-right: 2px; font-weight: 600; }
     .seat-free { font-size: 0.7rem; color: #f97316; margin-right: 2px; font-weight: 600; }
     .drop-active { outline: 3px solid #3b82f6; outline-offset: 2px; }
+    select { background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px 4px; font-size: 0.75rem; max-width: 190px; }
   </style>
 </head>
 <body class="bg-slate-100 min-h-screen p-4">
@@ -26,18 +27,18 @@
     </div>
 
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-      <label data-kind="sub"   class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-blue-400"></label>
-      <label data-kind="att8"  class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-green-400"></label>
-      <label data-kind="att7"  class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-green-400"></label>
-      <label data-kind="focus" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-purple-400"></label>
+      <label data-kind="sub"   class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white"></label>
+      <label data-kind="att8"  class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white"></label>
+      <label data-kind="att7"  class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white"></label>
+      <label data-kind="focus" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white"></label>
     </div>
 
     <div class="mb-3">
-      <label data-kind="free" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white hover:border-orange-400"></label>
+      <label data-kind="free" class="block p-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer text-center bg-white"></label>
       <div id="freeSeatResult" class="mt-2"></div>
     </div>
 
-    <p class="text-xs text-slate-400 text-center mb-4">xlsx · xlsm · xlsb · xls · ods · csv · tsv · txt 모두 지원 (한글 CSV 인코딩 자동 판별) · 드래그 앤 드롭 가능</p>
+    <p class="text-xs text-slate-400 text-center mb-4">xlsx · xlsm · xlsb · xls · ods · csv · tsv · txt 지원 (한글 CSV 인코딩 자동 판별) · 드래그 앤 드롭 가능</p>
 
     <div id="diag" class="mb-4"></div>
 
@@ -63,74 +64,66 @@
   let seatMap = { floor7: {}, floor8: {} };
   let focusRoomSeats = {};
   let freeSeatMap = {};
-  let submission = { submitted: [], parentApproved: [], supervisorApproved: [] };
+  let submission = { submitted: new Set(), parentApproved: new Set(), supervisorApproved: new Set() };
   let attendance = { floor7: { present: [], exited: [] }, floor8: { present: [], exited: [] } };
-  let attRaw = { 7: null, 8: null };
+
+  let attSource = { 7: null, 8: null };   // { file, info, sheets:[{name, rows, width}] }
+  let attMap = { 7: null, 8: null };      // { sheetName, headerRow, name, dir, time }
+  let attResult = { 7: null, 8: null };
+  let attPanelOpen = { 7: false, 8: false };
   let attNewestFirst = { 7: false, 8: false };
-  let diag = {};              // kind -> 진단 정보
+  let dirRules = {};                      // 사용자가 지정한 방향값 (양 층 공유)
+  let diag = {};
   let copiedText = '';
 
   const BOXES = {
-    sub:   { icon: '📁', title: '수능선배',    hint: '제출 현황',      accent: 'blue' },
-    att8:  { icon: '🏢', title: '8층 출석',    hint: '출입 기록',      accent: 'green' },
-    att7:  { icon: '🏢', title: '7층 출석',    hint: '출입 기록',      accent: 'green' },
-    focus: { icon: '🎯', title: '집중실',      hint: '좌석 배치',      accent: 'purple' },
-    free:  { icon: '🪑', title: '자유석 배치', hint: '이름 + 좌석번호', accent: 'orange' }
+    sub:   { icon: '📁', title: '수능선배',    hint: '제출 현황' },
+    att8:  { icon: '🏢', title: '8층 출석',    hint: '출입 기록' },
+    att7:  { icon: '🏢', title: '7층 출석',    hint: '출입 기록' },
+    focus: { icon: '🎯', title: '집중실',      hint: '좌석 배치' },
+    free:  { icon: '🪑', title: '자유석 배치', hint: '이름 + 좌석번호' }
   };
 
   /* ============================================================
-     1. 범용 파일 리더 — 확장자·인코딩 상관없이 워크북으로 변환
+     1. 범용 파일 리더
      ============================================================ */
-
-  // 앞부분 시그니처로 바이너리(엑셀) 여부 판별
-  function looksBinary(bytes) {
-    if (bytes.length < 4) return false;
-    const [a, b, c, d] = bytes;
-    if (a === 0x50 && b === 0x4b) return true;                         // PK.. → xlsx/xlsm/xlsb/ods (zip)
-    if (a === 0xd0 && b === 0xcf && c === 0x11 && d === 0xe0) return true; // OLE → xls
-    if (a === 0x09 && (b === 0x00 || b === 0x02 || b === 0x04)) return true; // BIFF2-5 xls
-    // NUL 바이트가 섞여 있으면(UTF-16 제외) 바이너리로 간주
+  function looksBinary(b) {
+    if (b.length < 4) return false;
+    if (b[0] === 0x50 && b[1] === 0x4b) return true;                                  // zip: xlsx/xlsm/xlsb/ods
+    if (b[0] === 0xd0 && b[1] === 0xcf && b[2] === 0x11 && b[3] === 0xe0) return true; // OLE: xls
+    if (b[0] === 0x09 && (b[1] === 0x00 || b[1] === 0x02 || b[1] === 0x04)) return true;
     return false;
   }
 
-  // 텍스트 디코딩: BOM → UTF-8 → EUC-KR(CP949) 순으로 시도
   function decodeText(bytes) {
     if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf)
       return { text: new TextDecoder('utf-8').decode(bytes.subarray(3)), encoding: 'UTF-8 (BOM)' };
-    if (bytes[0] === 0xff && bytes[1] === 0xfe)
-      return { text: new TextDecoder('utf-16le').decode(bytes), encoding: 'UTF-16LE' };
-    if (bytes[0] === 0xfe && bytes[1] === 0xff)
-      return { text: new TextDecoder('utf-16be').decode(bytes), encoding: 'UTF-16BE' };
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) return { text: new TextDecoder('utf-16le').decode(bytes), encoding: 'UTF-16LE' };
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) return { text: new TextDecoder('utf-16be').decode(bytes), encoding: 'UTF-16BE' };
 
     let utf8 = null;
-    try {
-      utf8 = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    } catch (e) { /* UTF-8 아님 */ }
-
+    try { utf8 = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch (e) {}
     if (utf8 !== null && !utf8.includes('\ufffd')) return { text: utf8, encoding: 'UTF-8' };
 
     for (const label of ['euc-kr', 'windows-949', 'iso-8859-1']) {
       try {
         const t = new TextDecoder(label).decode(bytes);
         if (!t.includes('\ufffd')) return { text: t, encoding: label.toUpperCase() };
-      } catch (e) { /* 미지원 라벨 */ }
+      } catch (e) {}
     }
     return { text: utf8 !== null ? utf8 : new TextDecoder('utf-8').decode(bytes), encoding: 'UTF-8 (일부 깨짐)' };
   }
 
-  // 구분자 추정 (쉼표 / 탭 / 세미콜론 / 파이프)
   function guessDelimiter(text) {
     const sample = text.split(/\r?\n/).slice(0, 20).join('\n');
-    const cand = [',', '\t', ';', '|'];
     let best = ',', bestCount = -1;
-    cand.forEach(ch => {
+    [',', '\t', ';', '|'].forEach(ch => {
       const n = sample.split(ch).length - 1;
       if (n > bestCount) { bestCount = n; best = ch; }
     });
     return best;
   }
 
-  // file → { workbook, info }
   async function readAnyFile(file) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const ext = (file.name.split('.').pop() || '').toLowerCase();
@@ -138,32 +131,31 @@
 
     if (!textExt && looksBinary(bytes)) {
       return {
-        workbook: XLSX.read(bytes, { type: 'array', cellDates: true, cellNF: false }),
+        workbook: XLSX.read(bytes, { type: 'array', cellDates: true }),
         info: { format: ext ? ext.toUpperCase() : '엑셀', encoding: '바이너리' }
       };
     }
-
     const { text, encoding } = decodeText(bytes);
     const FS = guessDelimiter(text);
     return {
       workbook: XLSX.read(text, { type: 'string', cellDates: true, FS }),
-      info: {
-        format: (ext || 'TEXT').toUpperCase(),
-        encoding,
-        delimiter: FS === '\t' ? 'TAB' : FS
-      }
+      info: { format: (ext || 'TEXT').toUpperCase(), encoding, delimiter: FS === '\t' ? 'TAB' : FS }
     };
   }
 
-  // 시트 → 2차원 배열
   function sheetRows(sheet) {
     return XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '', cellDates: true });
   }
+  function workbookSheets(wb) {
+    return wb.SheetNames.map(name => {
+      const rows = sheetRows(wb.Sheets[name]);
+      return { name, rows, width: Math.max(0, ...rows.map(r => (r || []).length)) };
+    });
+  }
 
   /* ============================================================
-     2. 공통 파서 유틸 — 헤더 위치·열 이름을 유연하게 탐색
+     2. 공통 유틸
      ============================================================ */
-
   function normHeader(v) {
     return (v == null ? '' : v.toString()).replace(/[\s\u00a0_\-.()[\]]/g, '').toLowerCase();
   }
@@ -172,61 +164,87 @@
       .replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '')
       .replace(/[\s\u00a0]/g, '').replace(/[0-9]/g, '').trim();
   }
+  // 명단과 출석 파일을 맞추기 위한 키 (한글만 남김)
+  function matchKey(v) {
+    const s = normName(v);
+    const k = s.match(/[가-힣]+/g);
+    return k ? k.join('') : s.toLowerCase();
+  }
   function isPersonName(v) {
     const s = normName(v);
-    return /^[가-힣]{2,5}$/.test(s) || /^[A-Za-z]{2,20}$/.test(s);
+    if (!s || s.length > 12) return false;
+    if (/[가-힣]{2,}/.test(s)) return true;
+    return /^[A-Za-z][A-Za-z.\-' ]{1,19}$/.test(s);
+  }
+  function colLabel(i) {
+    let s = '';
+    i = i + 1;
+    while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); }
+    return s;
+  }
+  function esc(v) {
+    return (v == null ? '' : v.toString()).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
   const KEYS = {
     name:   ['이름', '성명', '회원명', '학생명', '사용자', '사용자명', '이용자', '이용자명', '대상자', '대상자명', 'name', 'username', 'student'],
-    dir:    ['방향', '출입방향', '입출구분', '출입구분', '입출력', '구분', '출입', '유형', '인증구분', '출입유형', 'direction', 'inout', 'type', 'gubun'],
+    dir:    ['방향', '출입방향', '입출구분', '출입구분', '입출력', '구분', '출입', '유형', '인증구분', '출입유형', '상태', 'direction', 'inout', 'type', 'gubun'],
     time:   ['시간', '일시', '시각', '출입시간', '인증시간', '등록일', '등록일시', '발생일', '발생일시', 'datetime', 'time', 'date', 'timestamp'],
     status: ['승인상태', '상태', '진행상태', '승인', '처리상태', 'status'],
     seat:   ['좌석번호', '좌석', '자리', '자리번호', '번호', '석번호', 'seat', 'seatno']
   };
 
-  // rows 안에서 필요한 열들을 찾는다. required 전부 찾으면 성공.
   function findHeader(rows, required, optional = [], maxScan = 25) {
     for (let i = 0; i < Math.min(rows.length, maxScan); i++) {
       const r = rows[i] || [];
       const cols = {};
       let ok = true;
-      for (const field of required) {
-        const idx = r.findIndex(c => KEYS[field].includes(normHeader(c)));
+      for (const f of required) {
+        const idx = r.findIndex(c => KEYS[f].includes(normHeader(c)));
         if (idx === -1) { ok = false; break; }
-        cols[field] = idx;
+        cols[f] = idx;
       }
       if (!ok) continue;
-      for (const field of optional) {
-        const idx = r.findIndex(c => KEYS[field].some(k => normHeader(c).includes(k)));
-        if (idx !== -1) cols[field] = idx;
+      for (const f of optional) {
+        const idx = r.findIndex(c => KEYS[f].some(k => normHeader(c).includes(k)));
+        if (idx !== -1) cols[f] = idx;
       }
       return { headerRow: i, cols };
     }
     return null;
   }
 
-  // 워크북의 모든 시트를 시도해서 가장 많이 뽑히는 시트를 채택
-  function bestSheet(workbook, parseFn) {
+  function bestSheet(sheets, parseFn) {
     let best = null;
-    workbook.SheetNames.forEach(sn => {
+    sheets.forEach(s => {
       let r;
-      try { r = parseFn(sheetRows(workbook.Sheets[sn]), sn); } catch (e) { return; }
+      try { r = parseFn(s.rows, s.name); } catch (e) { return; }
       if (r && (!best || r.count > best.count)) best = r;
     });
     return best;
   }
 
   /* ============================================================
-     3. 출석(출입 기록)
+     3. 출석: 방향 / 시각 해석
      ============================================================ */
+  // 방향값 비교용: 구분자를 남겨 단어 경계를 살린다 (IN-DOOR / OUT_DOOR 대응)
+  function dirText(v) {
+    return (v == null ? '' : v.toString()).trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+  const NOT_DIR = /^(invalid|inactive|info|index|internal|outer|output|outline)/;
 
-  // allowNumeric: 방향 열이 헤더로 확인된 경우에만 1/2 같은 코드값을 허용 (사번 등 오인 방지)
   function parseDirection(v, allowNumeric = false) {
     const s = normHeader(v);
     if (!s) return null;
-    if (/^(out|o|퇴|x)$/.test(s) || /(exit|out|퇴실|퇴장|퇴근|출구|나감|하원|외출|귀가)/.test(s)) return 'EXIT';
-    if (/^(in|i|입)$/.test(s) || /(enter|entry|입실|입장|출근|입구|등원|들어)/.test(s)) return 'ENTER';
+    if (dirRules[s]) return dirRules[s];
+
+    const w = dirText(v);
+    if (/\bout\b|exit|퇴실|퇴장|퇴근|출구|나감|하원|외출|귀가|반출/.test(w) || /^(out|o|퇴|x)$/.test(s)) return 'EXIT';
+    if (/\bin\b|enter|entry|입실|입장|출근|입구|등원|들어|반입/.test(w) || /^(in|i|입)$/.test(s)) return 'ENTER';
+    if (w.length <= 12 && !NOT_DIR.test(w)) {
+      if (/^out/.test(w)) return 'EXIT';
+      if (/^in/.test(w)) return 'ENTER';
+    }
     if (allowNumeric) {
       if (s === '1') return 'ENTER';
       if (s === '2' || s === '0') return 'EXIT';
@@ -234,38 +252,28 @@
     return null;
   }
 
-  // 날짜/시각 문자열을 최대한 폭넓게 해석 (한글 오전·오후, 점·슬래시 구분자, 시간만 있는 값 포함)
   function parseTime(v) {
     if (v == null || v === '') return null;
     if (v instanceof Date) return isNaN(v) ? null : v.getTime();
 
     let s;
     if (typeof v === 'number') {
-      if (v >= 19000101 && v <= 29991231 && Number.isInteger(v)) s = String(v);  // 20260730 형태
-      else return Math.round((v - 25569) * 86400000);                            // 엑셀 시리얼
-    } else {
-      s = v.toString().trim();
-    }
+      if (v >= 19000101 && v <= 29991231 && Number.isInteger(v)) s = String(v);
+      else return Math.round((v - 25569) * 86400000);
+    } else s = v.toString().trim();
     if (!s) return null;
 
     const isPM = /(오후|PM|p\.?m\.?)/i.test(s);
     const isAM = /(오전|AM|a\.?m\.?)/i.test(s);
 
     let y, mo, d;
-    let m = s.match(/(\d{4})\s*[-/.년]\s*(\d{1,2})\s*[-/.월]\s*(\d{1,2})/);           // 2026-07-30
+    let m = s.match(/(\d{4})\s*[-/.년]\s*(\d{1,2})\s*[-/.월]\s*(\d{1,2})/);
     if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
-    if (!m) {
-      m = s.match(/(\d{1,2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{4})/);               // 07/30/2026
-      if (m) { y = +m[3]; mo = +m[1]; d = +m[2]; }
-    }
-    if (!m) {
-      m = s.match(/(?:^|\D)(\d{4})(\d{2})(\d{2})(?:\D|$)/);                          // 20260730
-      if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
-    }
+    if (!m) { m = s.match(/(\d{1,2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{4})/); if (m) { y = +m[3]; mo = +m[1]; d = +m[2]; } }
+    if (!m) { m = s.match(/(?:^|\D)(\d{4})(\d{2})(\d{2})(?:\D|$)/); if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; } }
 
     let t = s.match(/(\d{1,2})\s*[:시]\s*(\d{1,2})(?:\s*[:분]\s*(\d{1,2}))?/);
     if (!t) {
-      // 174043 / 1740 처럼 구분자 없는 시각
       const rest = m ? s.replace(m[0], ' ') : s;
       const ct = rest.match(/(?:^|\D)([01]\d|2[0-3])([0-5]\d)([0-5]\d)?(?:\D|$)/);
       if (ct) t = ct;
@@ -281,57 +289,64 @@
       const dt = new Date(y, mo - 1, d, h, mi, sec);
       return isNaN(dt) ? null : dt.getTime();
     }
-    if (t) return ((h * 60 + mi) * 60 + sec) * 1000;   // 시각만 있는 값 (같은 날 기준 정렬용)
+    if (t) return ((h * 60 + mi) * 60 + sec) * 1000;
     return null;
   }
 
-  function parseAttendanceRows(rows, sheetName) {
-    const out = { sheetName, headerRow: -1, cols: {}, records: [], dirValues: [], count: 0, totalRows: rows.length, firstRows: rows.slice(0, 3) };
-    if (!rows.length) return out;
-
+  /* ============================================================
+     4. 출석: 자동 열 탐지 → 레코드 추출 → 최종 상태
+     ============================================================ */
+  function autoDetectColumns(rows) {
     const found = findHeader(rows, ['name', 'dir'], ['time']);
-    if (found) {
-      out.headerRow = found.headerRow;
-      out.cols = found.cols;
-    } else {
-      // 헤더가 없는 파일: 값 패턴으로 열 추론
-      const scan = rows.slice(0, Math.min(rows.length, 80));
-      const width = Math.max(...scan.map(r => (r || []).length), 0);
-      let nameCol = -1, nameHit = 0, dirCol = -1, dirHit = 0;
-      for (let c = 0; c < width; c++) {
-        let n = 0, d = 0;
-        scan.forEach(r => {
-          const v = (r || [])[c];
-          if (isPersonName(v)) n++;
-          if (parseDirection(v, false)) d++;
-        });
-        if (n > nameHit) { nameHit = n; nameCol = c; }
-        if (d > dirHit) { dirHit = d; dirCol = c; }
-      }
-      // 방향값은 이름이 있는 행마다 붙어야 정상 — 비율이 낮으면 방향 열이 아니라고 본다
-      if (nameHit < 2 || dirHit < 2 || nameCol === dirCol || dirHit < nameHit * 0.6) return out;
-      out.headerRow = -2;
-      out.cols = { name: nameCol, dir: dirCol };
-      for (let c = 0; c < width; c++) {
-        if (c === nameCol || c === dirCol) continue;
-        if (scan.filter(r => parseTime((r || [])[c])).length >= 2) { out.cols.time = c; break; }
-      }
-    }
+    if (found) return { headerRow: found.headerRow, name: found.cols.name, dir: found.cols.dir, time: found.cols.time ?? null };
 
-    const start = out.headerRow >= 0 ? out.headerRow + 1 : 0;
-    const dirSet = new Set();
+    const scan = rows.slice(0, Math.min(rows.length, 120));
+    const width = Math.max(0, ...scan.map(r => (r || []).length));
+    let nameCol = -1, nameHit = 0, dirCol = -1, dirHit = 0;
+    for (let c = 0; c < width; c++) {
+      let n = 0, d = 0;
+      scan.forEach(r => {
+        const v = (r || [])[c];
+        if (isPersonName(v)) n++;
+        if (parseDirection(v, false)) d++;
+      });
+      if (n > nameHit) { nameHit = n; nameCol = c; }
+      if (d > dirHit) { dirHit = d; dirCol = c; }
+    }
+    if (nameHit < 2 || dirHit < 2 || nameCol === dirCol || dirHit < nameHit * 0.6) return null;
+
+    let timeCol = null;
+    for (let c = 0; c < width; c++) {
+      if (c === nameCol || c === dirCol) continue;
+      if (scan.filter(r => parseTime((r || [])[c])).length >= 2) { timeCol = c; break; }
+    }
+    return { headerRow: -2, name: nameCol, dir: dirCol, time: timeCol };
+  }
+
+  function extractRecords(rows, map) {
+    const out = { records: [], dirValues: [], nameRows: 0, unmapped: [] };
+    if (!map || map.name == null) return out;
+    const start = map.headerRow >= 0 ? map.headerRow + 1 : 0;
+    const dirCount = {};
     for (let i = start; i < rows.length; i++) {
       const r = rows[i] || [];
-      const name = normName(r[out.cols.name]);
-      if (!name || !isPersonName(name)) continue;
-      const rawDir = r[out.cols.dir];
-      if (rawDir !== '' && rawDir != null) dirSet.add(rawDir.toString().trim());
-      const dir = parseDirection(rawDir, out.headerRow >= 0);
+      const raw = r[map.name];
+      if (!isPersonName(raw)) continue;
+      out.nameRows++;
+      const rawDir = map.dir == null ? '' : r[map.dir];
+      const label = (rawDir == null ? '' : rawDir.toString()).trim();
+      if (label) dirCount[label] = (dirCount[label] || 0) + 1;
+      const dir = parseDirection(rawDir, map.headerRow >= 0);
       if (!dir) continue;
-      out.records.push({ name, dir, time: out.cols.time != null ? parseTime(r[out.cols.time]) : null, idx: i });
+      out.records.push({
+        key: matchKey(raw),
+        dir,
+        time: map.time == null ? null : parseTime(r[map.time]),
+        idx: i
+      });
     }
-    out.dirValues = [...dirSet].slice(0, 10);
-    out.count = out.records.length;
+    out.dirValues = Object.entries(dirCount).sort((a, b) => b[1] - a[1]).slice(0, 24);
+    out.unmapped = out.dirValues.filter(([v]) => !parseDirection(v, map.headerRow >= 0));
     return out;
   }
 
@@ -341,65 +356,199 @@
     if (hasTime) sorted.sort((a, b) => (a.time ?? -Infinity) - (b.time ?? -Infinity) || a.idx - b.idx);
     else sorted.sort((a, b) => newestFirst ? b.idx - a.idx : a.idx - b.idx);
     const last = {};
-    sorted.forEach(r => { last[r.name] = r.dir; });
+    sorted.forEach(r => { last[r.key] = r.dir; });
     return {
-      present: Object.keys(last).filter(n => last[n] === 'ENTER'),
-      exited: Object.keys(last).filter(n => last[n] === 'EXIT'),
+      present: Object.keys(last).filter(k => last[k] === 'ENTER'),
+      exited: Object.keys(last).filter(k => last[k] === 'EXIT'),
       hasTime
     };
   }
 
-  function applyAttendance(floor) {
-    const parsed = attRaw[floor];
-    if (!parsed) return;
-    const folded = foldRecords(parsed.records, attNewestFirst[floor]);
-    attendance[floor === 7 ? 'floor7' : 'floor8'] = { present: folded.present, exited: folded.exited };
+  function sheetByName(floor, name) {
+    const src = attSource[floor];
+    if (!src) return null;
+    return src.sheets.find(s => s.name === name) || src.sheets[0] || null;
+  }
 
-    const kind = 'att' + floor;
-    const ok = parsed.count > 0;
-    diag[kind] = Object.assign({}, diag[kind], {
-      ok, detail: parsed, folded,
-      summary: ok
-        ? `시트 "${parsed.sheetName}" · ${parsed.headerRow >= 0 ? (parsed.headerRow + 1) + '행 헤더' : '헤더 없음(값 추론)'} · 기록 ${parsed.count}건`
-        : '이름/방향 열을 찾지 못했습니다'
+  function autoMapFor(floor) {
+    const src = attSource[floor];
+    if (!src) return null;
+    let best = null;
+    src.sheets.forEach(s => {
+      const cols = autoDetectColumns(s.rows);
+      if (!cols) return;
+      const r = extractRecords(s.rows, cols);
+      if (!best || r.records.length > best.count) best = { map: Object.assign({ sheetName: s.name }, cols), count: r.records.length };
     });
-    setBox(kind, ok ? 'ok' : 'warn', ok ? `${folded.present.length}명 있음 / ${folded.exited.length}명 나감` : '열 인식 실패');
+    return best ? best.map : null;
+  }
+
+  function resolveAttendance(floor) {
+    const src = attSource[floor];
+    if (!src) return;
+    if (!attMap[floor]) {
+      attMap[floor] = autoMapFor(floor)
+        || { sheetName: (src.sheets[0] || {}).name, headerRow: -2, name: null, dir: null, time: null };
+    }
+
+    const map = attMap[floor];
+    const sheet = map ? sheetByName(floor, map.sheetName) : src.sheets[0];
+    const rows = sheet ? sheet.rows : [];
+    const ext = map ? extractRecords(rows, map) : { records: [], dirValues: [], nameRows: 0, unmapped: [] };
+    const folded = foldRecords(ext.records, attNewestFirst[floor]);
+
+    attendance[floor === 7 ? 'floor7' : 'floor8'] = { present: folded.present, exited: folded.exited };
+    attResult[floor] = { map, sheet, ext, folded };
+
+    const ok = ext.records.length > 0;
+    const kind = 'att' + floor;
+    let reason = '';
+    if (!ok) {
+      if (!map || map.name == null || map.dir == null) reason = '이름·방향 열을 자동으로 찾지 못했습니다';
+      else if (ext.nameRows === 0) reason = '선택한 이름 열에서 이름을 찾지 못했습니다';
+      else reason = '방향 값을 해석할 수 없습니다 (아래에서 값의 뜻을 지정하세요)';
+      attPanelOpen[floor] = true;
+    }
+    diag[kind] = Object.assign({}, diag[kind], { ok, reason });
+    setBox(kind, ok ? 'ok' : 'warn', ok ? `${folded.present.length}명 있음 / ${folded.exited.length}명 나감` : '설정 필요');
     renderDiag();
     render();
   }
 
+  /* ============================================================
+     5. 매핑 UI
+     ============================================================ */
+  function setMapField(floor, field, value) {
+    const map = Object.assign({}, attMap[floor]);
+    if (field === 'sheetName') {
+      const sheet = sheetByName(floor, value);
+      const cols = sheet ? autoDetectColumns(sheet.rows) : null;
+      attMap[floor] = Object.assign({ sheetName: value, headerRow: -2, name: null, dir: null, time: null }, cols || {}, { sheetName: value });
+    } else {
+      map[field] = value;
+      attMap[floor] = map;
+    }
+    resolveAttendance(floor);
+  }
+
+  function setDirRule(floor, valueKey, dir) {
+    if (dir) dirRules[valueKey] = dir; else delete dirRules[valueKey];
+    resolveAttendance(7);
+    resolveAttendance(8);
+  }
+
+  function togglePanel(floor) {
+    attPanelOpen[floor] = !attPanelOpen[floor];
+    renderDiag();
+  }
+
   function toggleOrder(floor) {
     attNewestFirst[floor] = !attNewestFirst[floor];
-    applyAttendance(floor);
+    resolveAttendance(floor);
+  }
+
+  function colOptions(floor, selected, includeNone) {
+    const res = attResult[floor];
+    const sheet = res && res.sheet;
+    if (!sheet) return '';
+    const map = attMap[floor] || {};
+    const headerRow = map.headerRow >= 0 ? (sheet.rows[map.headerRow] || []) : null;
+    const sample = [];
+    for (let c = 0; c < sheet.width; c++) {
+      let label = colLabel(c);
+      if (headerRow && headerRow[c] !== '' && headerRow[c] != null) label += ': ' + headerRow[c];
+      else {
+        const start = map.headerRow >= 0 ? map.headerRow + 1 : 0;
+        const first = (sheet.rows.slice(start, start + 30).find(r => (r || [])[c] !== '' && (r || [])[c] != null) || [])[c];
+        if (first != null && first !== '') label += ': ' + String(first).slice(0, 12);
+      }
+      sample.push(`<option value="${c}" ${String(selected) === String(c) ? 'selected' : ''}>${esc(label)}</option>`);
+    }
+    return (includeNone ? `<option value="" ${selected == null ? 'selected' : ''}>없음</option>` : '') + sample.join('');
+  }
+
+  function mapPanel(floor) {
+    const src = attSource[floor];
+    const res = attResult[floor];
+    if (!src || !res) return '';
+    if (!attPanelOpen[floor]) {
+      return `<button onclick="togglePanel(${floor})" class="text-blue-600 underline text-xs">🔧 열 직접 지정</button>`;
+    }
+    const map = attMap[floor] || { headerRow: -2, name: null, dir: null, time: null, sheetName: src.sheets[0] && src.sheets[0].name };
+    const sheet = res.sheet;
+
+    const sheetOpts = src.sheets.map(s =>
+      `<option value="${esc(s.name)}" ${s.name === (sheet && sheet.name) ? 'selected' : ''}>${esc(s.name)} (${s.rows.length}행)</option>`).join('');
+
+    const headerOpts = [`<option value="-2" ${map.headerRow < 0 ? 'selected' : ''}>헤더 없음</option>`]
+      .concat((sheet ? sheet.rows.slice(0, 15) : []).map((r, i) =>
+        `<option value="${i}" ${map.headerRow === i ? 'selected' : ''}>${i + 1}행: ${esc((r || []).slice(0, 4).join(' | ')).slice(0, 40)}</option>`)).join('');
+
+    const values = res.ext.dirValues.map(([v, n]) => {
+      const key = normHeader(v);
+      const cur = parseDirection(v, map.headerRow >= 0);
+      const btn = (label, dir, cls) =>
+        `<button onclick="setDirRule(${floor}, '${esc(key)}', ${dir ? `'${dir}'` : 'null'})"
+          class="px-1.5 py-0.5 rounded border text-[11px] ${cur === dir || (!dir && !cur) ? cls : 'bg-white text-slate-500 border-slate-300'}">${label}</button>`;
+      return `<div class="flex items-center gap-1 bg-white rounded border px-2 py-1">
+        <code class="text-[11px]">${esc(v)}</code><span class="text-[10px] text-slate-400">×${n}</span>
+        ${btn('입실', 'ENTER', 'bg-green-100 text-green-700 border-green-400')}
+        ${btn('퇴실', 'EXIT', 'bg-orange-100 text-orange-700 border-orange-400')}
+        ${btn('무시', null, 'bg-slate-200 text-slate-600 border-slate-400')}
+      </div>`;
+    }).join('');
+
+    const peek = (sheet ? sheet.rows.slice(0, 3) : []).map((r, i) =>
+      `<div class="truncate"><span class="text-slate-400">${i + 1}행:</span> ${(r || []).slice(0, 10).map(c => `<code class="bg-white px-1 rounded border">${esc(c === '' ? '·' : c)}</code>`).join(' ')}</div>`).join('');
+
+    return `
+      <div class="mt-2 bg-slate-50 rounded-lg p-3 space-y-2 text-xs">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-slate-700">${floor}층 출석 파일 열 지정</span>
+          <button onclick="togglePanel(${floor})" class="text-slate-400 hover:text-slate-600">닫기 ✕</button>
+        </div>
+        <div class="space-y-1 text-slate-500">${peek}</div>
+        <div class="flex flex-wrap gap-x-3 gap-y-2 items-center">
+          <label>시트 <select onchange="setMapField(${floor},'sheetName',this.value)">${sheetOpts}</select></label>
+          <label>헤더 <select onchange="setMapField(${floor},'headerRow',+this.value)">${headerOpts}</select></label>
+          <label>이름 열 <select onchange="setMapField(${floor},'name',+this.value)">${colOptions(floor, map.name, true)}</select></label>
+          <label>방향 열 <select onchange="setMapField(${floor},'dir',+this.value)">${colOptions(floor, map.dir, true)}</select></label>
+          <label>시간 열 <select onchange="setMapField(${floor},'time',this.value===''?null:+this.value)">${colOptions(floor, map.time, true)}</select></label>
+        </div>
+        ${values ? `<div><div class="mb-1 text-slate-600">방향 열의 값 (${res.ext.unmapped.length ? '빨간 표시가 없는 값은 무시됩니다' : '자동 인식됨'})</div>
+          <div class="flex flex-wrap gap-1">${values}</div></div>`
+        : '<div class="text-slate-500">방향 열을 선택하면 값 목록이 표시됩니다.</div>'}
+        <div class="text-slate-400">이름 인식 ${res.ext.nameRows}행 · 방향 인식 ${res.ext.records.length}건</div>
+      </div>`;
   }
 
   /* ============================================================
-     4. 각 파일 처리
+     6. 파일 처리
      ============================================================ */
-
   async function handleFile(kind, file) {
     if (!file) return;
     setBox(kind, 'loading', file.name);
     try {
       const { workbook, info } = await readAnyFile(file);
+      const sheets = workbookSheets(workbook);
       diag[kind] = { file: file.name, info };
-      HANDLERS[kind](workbook);
+      HANDLERS[kind](sheets);
     } catch (err) {
-      diag[kind] = { file: file.name, ok: false, summary: '파일을 열 수 없습니다: ' + err.message };
+      diag[kind] = { file: file.name, ok: false, reason: '파일을 열 수 없습니다: ' + err.message };
       setBox(kind, 'warn', '읽기 실패');
       renderDiag();
     }
   }
 
   const HANDLERS = {
-    att8: wb => { attRaw[8] = bestSheet(wb, parseAttendanceRows) || { count: 0, records: [], firstRows: [] }; applyAttendance(8); },
-    att7: wb => { attRaw[7] = bestSheet(wb, parseAttendanceRows) || { count: 0, records: [], firstRows: [] }; applyAttendance(7); },
+    att8: sheets => { attSource[8] = { sheets }; attMap[8] = null; resolveAttendance(8); },
+    att7: sheets => { attSource[7] = { sheets }; attMap[7] = null; resolveAttendance(7); },
 
-    sub: wb => {
-      const parsed = bestSheet(wb, (rows, sheetName) => {
+    sub: sheets => {
+      const parsed = bestSheet(sheets, (rows, sheetName) => {
         const found = findHeader(rows, ['name', 'status']);
         if (!found) return { count: 0, sheetName, firstRows: rows.slice(0, 3) };
-        const res = { submitted: [], parentApproved: [], supervisorApproved: [] };
+        const res = { submitted: new Set(), parentApproved: new Set(), supervisorApproved: new Set() };
         const statusValues = new Set();
         for (let i = found.headerRow + 1; i < rows.length; i++) {
           const r = rows[i] || [];
@@ -408,17 +557,18 @@
           if (!name || !status) continue;
           statusValues.add(status);
           const s = normHeader(status);
-          if (s.includes('사감')) res.supervisorApproved.push(name);
-          else if (s.includes('학부모') || s.includes('부모')) res.parentApproved.push(name);
-          else if (s.includes('제출')) res.submitted.push(name);
+          const key = matchKey(name);
+          if (s.includes('사감')) res.supervisorApproved.add(key);
+          else if (s.includes('학부모') || s.includes('부모')) res.parentApproved.add(key);
+          else if (s.includes('제출')) res.submitted.add(key);
         }
-        const count = res.submitted.length + res.parentApproved.length + res.supervisorApproved.length;
+        const count = res.submitted.size + res.parentApproved.size + res.supervisorApproved.size;
         return { count, sheetName, headerRow: found.headerRow, res, statusValues: [...statusValues].slice(0, 10), firstRows: rows.slice(0, 3) };
       });
 
       if (!parsed || !parsed.count) {
-        submission = { submitted: [], parentApproved: [], supervisorApproved: [] };
-        diag.sub = Object.assign({}, diag.sub, { ok: false, summary: '이름/승인상태 열을 찾지 못했습니다', detail: parsed });
+        submission = { submitted: new Set(), parentApproved: new Set(), supervisorApproved: new Set() };
+        diag.sub = Object.assign({}, diag.sub, { ok: false, reason: '이름·승인상태 열을 찾지 못했습니다', detail: parsed });
         setBox('sub', 'warn', '열 인식 실패');
       } else {
         submission = parsed.res;
@@ -431,45 +581,42 @@
       renderDiag(); render();
     },
 
-    focus: wb => {
-      const parsed = bestSheet(wb, (rows, sheetName) => parseNameSeat(rows, sheetName, null));
+    focus: sheets => {
+      const parsed = bestSheet(sheets, (rows, sheetName) => parseNameSeat(rows, sheetName, null));
       focusRoomSeats = {};
       if (parsed && parsed.count) parsed.map.forEach(({ name, seat }) => { focusRoomSeats[name] = seat; });
       const ok = Object.keys(focusRoomSeats).length > 0;
       diag.focus = Object.assign({}, diag.focus, {
         ok, detail: parsed,
-        summary: ok ? `시트 "${parsed.sheetName}" · ${parsed.count}명` : '이름/좌석번호를 찾지 못했습니다'
+        summary: ok ? `시트 "${parsed.sheetName}" · ${parsed.count}명` : '',
+        reason: ok ? '' : '이름·좌석번호를 찾지 못했습니다'
       });
       setBox('focus', ok ? 'ok' : 'warn', ok ? `${Object.keys(focusRoomSeats).length}명 배치` : '열 인식 실패');
       renderDiag(); render();
     },
 
-    free: wb => {
-      const parsed = bestSheet(wb, (rows, sheetName) => parseNameSeat(rows, sheetName, [57, 104]));
+    free: sheets => {
+      const parsed = bestSheet(sheets, (rows, sheetName) => parseNameSeat(rows, sheetName, [57, 104]));
       freeSeatMap = {};
       if (parsed && parsed.count) parsed.map.forEach(({ name, seat }) => { freeSeatMap[name] = seat; });
       const count = Object.keys(freeSeatMap).length;
       diag.free = Object.assign({}, diag.free, {
         ok: count > 0, detail: parsed,
-        summary: count > 0
-          ? `시트 "${parsed.sheetName}" · ${count}명${parsed.skipped ? ` · 범위(57~104) 밖 ${parsed.skipped}건 제외` : ''}`
-          : '이름/좌석번호를 찾지 못했습니다'
+        summary: count > 0 ? `시트 "${parsed.sheetName}" · ${count}명${parsed.skipped ? ` · 범위(57~104) 밖 ${parsed.skipped}건 제외` : ''}` : '',
+        reason: count > 0 ? '' : '이름·좌석번호를 찾지 못했습니다'
       });
       setBox('free', count > 0 ? 'ok' : 'warn', count > 0 ? `${count}명 로드 완료` : '열 인식 실패');
-
       document.getElementById('freeSeatResult').innerHTML = count > 0 ? `
         <div class="bg-orange-50 rounded-lg p-3 text-sm">
           <div class="font-bold mb-2 text-orange-700">🪑 자유석 (${count}명)</div>
           <div class="flex flex-wrap gap-2">
             ${Object.entries(freeSeatMap).sort((a, b) => a[1] - b[1])
-              .map(([n, s]) => `<span class="px-2 py-1 bg-white rounded border text-xs">[${s}] ${n}</span>`).join('')}
-          </div>
-        </div>` : '';
+              .map(([n, s]) => `<span class="px-2 py-1 bg-white rounded border text-xs">[${s}] ${esc(n)}</span>`).join('')}
+          </div></div>` : '';
       renderDiag(); render();
     }
   };
 
-  // 이름 + 좌석번호 형태 공통 파서 (헤더 있으면 사용, 없으면 앞의 두 열 추론)
   function parseNameSeat(rows, sheetName, range) {
     const out = { sheetName, count: 0, map: [], skipped: 0, firstRows: rows.slice(0, 3) };
     if (!rows.length) return out;
@@ -478,10 +625,9 @@
     const found = findHeader(rows, ['name', 'seat']);
     if (found) {
       nameCol = found.cols.name; seatCol = found.cols.seat; start = found.headerRow + 1;
-      out.headerRow = found.headerRow;
     } else {
       const scan = rows.slice(0, Math.min(rows.length, 200));
-      const width = Math.max(...scan.map(r => (r || []).length), 0);
+      const width = Math.max(0, ...scan.map(r => (r || []).length));
       let bestN = -1, hitN = 0;
       for (let c = 0; c < width; c++) {
         const n = scan.filter(r => isPersonName((r || [])[c])).length;
@@ -496,14 +642,15 @@
       }
       if (bestS === -1) return out;
       nameCol = bestN; seatCol = bestS; start = 0;
-      out.headerRow = -2;
     }
 
     const seen = new Set();
     for (let i = start; i < rows.length; i++) {
       const r = rows[i] || [];
-      const name = normName(r[nameCol]);
-      if (!name || !isPersonName(name) || seen.has(name)) continue;
+      const raw = r[nameCol];
+      if (!isPersonName(raw)) continue;
+      const name = matchKey(raw);
+      if (seen.has(name)) continue;
       const m = (r[seatCol] ?? '').toString().match(/\d+/);
       if (!m) continue;
       const seat = parseInt(m[0], 10);
@@ -516,14 +663,13 @@
   }
 
   /* ============================================================
-     5. 업로드 박스 UI + 드래그 앤 드롭
+     7. 업로드 박스 + 드래그 앤 드롭
      ============================================================ */
-
   const TONE = {
-    idle:    'border-dashed border-slate-300 bg-white',
+    idle: 'border-dashed border-slate-300 bg-white',
     loading: 'border-slate-400 bg-slate-50',
-    ok:      'border-green-400 bg-green-50',
-    warn:    'border-red-400 bg-red-50'
+    ok: 'border-green-400 bg-green-50',
+    warn: 'border-red-400 bg-red-50'
   };
 
   function setBox(kind, state, sub) {
@@ -532,12 +678,10 @@
     if (!el) return;
     el.className = `block p-3 border-2 rounded-xl cursor-pointer text-center ${TONE[state]}`;
     const icon = state === 'ok' ? '✅' : state === 'warn' ? '⚠️' : state === 'loading' ? '⏳' : b.icon;
-    const subClass = state === 'warn' ? 'text-red-600' : 'text-slate-500';
     el.innerHTML = `
       <div class="text-base mb-1">${icon} ${b.title}</div>
-      <div class="text-xs ${subClass} truncate">${sub ?? b.hint}</div>
-      <input type="file" accept="${ACCEPT}" class="hidden" onchange="handleFile('${kind}', this.files[0])">
-    `;
+      <div class="text-xs ${state === 'warn' ? 'text-red-600' : 'text-slate-500'} truncate">${esc(sub ?? b.hint)}</div>
+      <input type="file" accept="${ACCEPT}" class="hidden" onchange="handleFile('${kind}', this.files[0])">`;
   }
 
   function initBoxes() {
@@ -547,58 +691,54 @@
       el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drop-active'); });
       el.addEventListener('dragleave', () => el.classList.remove('drop-active'));
       el.addEventListener('drop', e => {
-        e.preventDefault();
-        el.classList.remove('drop-active');
+        e.preventDefault(); el.classList.remove('drop-active');
         if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(kind, e.dataTransfer.files[0]);
       });
     });
   }
 
   /* ============================================================
-     6. 진단 패널
+     8. 진단 패널
      ============================================================ */
-
   function renderDiag() {
-    const rows = Object.keys(BOXES).filter(k => diag[k]).map(kind => {
-      const d = diag[kind];
-      const b = BOXES[kind];
+    const blocks = Object.keys(BOXES).filter(k => diag[k]).map(kind => {
+      const d = diag[kind], b = BOXES[kind];
       const meta = d.info ? `${d.info.format}${d.info.encoding ? ' / ' + d.info.encoding : ''}${d.info.delimiter ? ' / 구분자 ' + d.info.delimiter : ''}` : '';
+      const head = `<span class="font-bold">${b.title}</span> <span class="text-slate-400">${esc(d.file || '')} ${meta ? '(' + meta + ')' : ''}</span>`;
 
-      if (d.ok) {
-        const att = kind.startsWith('att') ? Number(kind.slice(3)) : null;
-        const orderBtn = att && d.folded && !d.folded.hasTime
-          ? ` · 시간열 없음 → <button onclick="toggleOrder(${att})" class="text-blue-600 underline">${attNewestFirst[att] ? '최신이 위' : '최신이 아래'} (반대로)</button>`
-          : (att && d.folded && d.folded.hasTime ? ' · 시간 기준 판정' : '');
-        const dirs = att && d.detail && d.detail.dirValues && d.detail.dirValues.length
-          ? ` · 방향값 ${d.detail.dirValues.map(v => `<code class="bg-slate-100 px-1 rounded">${esc(v)}</code>`).join(' ')}` : '';
-        return `<div class="py-2 text-xs text-slate-600 border-b last:border-0">
-          <span class="font-bold">${b.title}</span>
-          <span class="text-slate-400">${esc(d.file || '')} ${meta ? '(' + meta + ')' : ''}</span><br>
-          ${d.summary || ''}${dirs}${orderBtn}
-        </div>`;
+      if (kind.startsWith('att')) {
+        const floor = Number(kind.slice(3));
+        const res = attResult[floor];
+        let line = '';
+        if (res && d.ok) {
+          const m = res.map;
+          line = `시트 "${res.sheet.name}" · ${m.headerRow >= 0 ? (m.headerRow + 1) + '행 헤더' : '헤더 없음'} · `
+            + `이름 ${colLabel(m.name)}열 / 방향 ${colLabel(m.dir)}열${m.time != null ? ' / 시간 ' + colLabel(m.time) + '열' : ''} · `
+            + `${res.ext.records.length}건 · `
+            + (res.folded.hasTime ? '시간 기준 판정'
+              : `<button onclick="toggleOrder(${floor})" class="text-blue-600 underline">${attNewestFirst[floor] ? '최신이 위' : '최신이 아래'} (반대로)</button>`);
+        } else {
+          line = `<span class="text-red-600 font-medium">${esc(d.reason || '인식 실패')}</span>`;
+        }
+        return `<div class="py-2 text-xs border-b last:border-0 ${d.ok ? 'text-slate-600' : 'text-red-700'}">
+          ${head}<br>${line}<div class="mt-1">${mapPanel(floor)}</div></div>`;
       }
 
-      const peek = ((d.detail && d.detail.firstRows) || []).map((r, i) =>
-        `<div><span class="text-slate-400">${i + 1}행:</span> ${(r || []).map(c => `<code class="bg-white px-1 rounded border">${esc(c === '' ? '(빈칸)' : c)}</code>`).join(' ')}</div>`
-      ).join('');
-      return `<div class="py-2 text-xs text-red-700 border-b last:border-0">
-        <div class="font-bold mb-1">⚠️ ${b.title} — ${esc(d.summary || '읽기 실패')}</div>
-        <div class="text-slate-500 mb-1">${esc(d.file || '')} ${meta ? '(' + meta + ')' : ''}</div>
-        ${peek ? `<div class="mb-1">파일 상단 내용:</div><div class="space-y-1">${peek}</div>` : ''}
-      </div>`;
-    });
-    document.getElementById('diag').innerHTML = rows.length
-      ? `<div class="bg-white rounded-xl px-4 py-1">${rows.join('')}</div>` : '';
-  }
+      if (d.ok) return `<div class="py-2 text-xs text-slate-600 border-b last:border-0">${head}<br>${esc(d.summary || '')}</div>`;
 
-  function esc(v) {
-    return (v == null ? '' : v.toString()).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const peek = ((d.detail && d.detail.firstRows) || []).map((r, i) =>
+        `<div class="truncate"><span class="text-slate-400">${i + 1}행:</span> ${(r || []).slice(0, 10).map(c => `<code class="bg-white px-1 rounded border">${esc(c === '' ? '·' : c)}</code>`).join(' ')}</div>`).join('');
+      return `<div class="py-2 text-xs text-red-700 border-b last:border-0">
+        <div class="font-bold mb-1">⚠️ ${b.title} — ${esc(d.reason || '읽기 실패')}</div>
+        <div class="text-slate-500 mb-1">${esc(d.file || '')} ${meta ? '(' + meta + ')' : ''}</div>
+        ${peek ? `<div class="space-y-1">${peek}</div>` : ''}</div>`;
+    });
+    document.getElementById('diag').innerHTML = blocks.length ? `<div class="bg-white rounded-xl px-4 py-1">${blocks.join('')}</div>` : '';
   }
 
   /* ============================================================
-     7. Google Sheets 명단
+     9. Google Sheets 명단
      ============================================================ */
-
   async function loadGoogleSheets() {
     document.getElementById('status').textContent = '⏳ 로딩중...';
     try {
@@ -649,12 +789,12 @@
   }
 
   /* ============================================================
-     8. 렌더링
+     10. 렌더링
      ============================================================ */
-
   function getSeatNumber(name, floor) {
-    if (focusRoomSeats[name]) return '집중' + focusRoomSeats[name];
-    if (floor === 8 && freeSeatMap[name]) return freeSeatMap[name];
+    const key = matchKey(name);
+    if (focusRoomSeats[key]) return '집중' + focusRoomSeats[key];
+    if (floor === 8 && freeSeatMap[key]) return freeSeatMap[key];
     const map = floor === 7 ? seatMap.floor7 : seatMap.floor8;
     const seatNum = map[name];
     if (!seatNum || typeof seatNum !== 'number' || seatNum > 100) return null;
@@ -674,28 +814,34 @@
 
   function render() {
     const resultDiv = document.getElementById('result');
-    if (roster.floor7.length === 0 && roster.floor8.length === 0) { resultDiv.innerHTML = ''; return; }
+    if (!roster.floor7.length && !roster.floor8.length) { resultDiv.innerHTML = ''; return; }
 
-    const total = submission.submitted.length + submission.parentApproved.length + submission.supervisorApproved.length;
+    const total = submission.submitted.size + submission.parentApproved.size + submission.supervisorApproved.size;
     if (total === 0) {
       resultDiv.innerHTML = '<div class="bg-white rounded-xl p-8 text-center text-slate-400">수능선배 제출 현황 파일을 업로드하세요</div>';
       return;
     }
 
-    const all = new Set([...submission.submitted, ...submission.parentApproved, ...submission.supervisorApproved]);
-    const bucket = floorKey => ({
-      notSubmitted: roster[floorKey].filter(n => !all.has(n)),
-      submitted: roster[floorKey].filter(n => submission.submitted.includes(n)),
-      parentApproved: roster[floorKey].filter(n => submission.parentApproved.includes(n)),
-      supervisorApproved: roster[floorKey].filter(n => submission.supervisorApproved.includes(n))
-    });
+    const bucket = key => {
+      const list = roster[key];
+      return {
+        submitted: list.filter(n => submission.submitted.has(matchKey(n))),
+        parentApproved: list.filter(n => submission.parentApproved.has(matchKey(n))),
+        supervisorApproved: list.filter(n => submission.supervisorApproved.has(matchKey(n))),
+        notSubmitted: list.filter(n => {
+          const k = matchKey(n);
+          return !submission.submitted.has(k) && !submission.parentApproved.has(k) && !submission.supervisorApproved.has(k);
+        })
+      };
+    };
     const d8 = bucket('floor8'), d7 = bucket('floor7');
 
-    const head = (floor, count, att) => `🏢 ${floor}층 (총 ${count}명)` + (att.present.length || att.exited.length
-      ? ` <span class="text-sm font-normal text-green-600">- ${att.present.length}명 있음 / ${att.exited.length}명 나감</span>` : '');
+    const head = (floor, att) => `🏢 ${floor}층 (총 ${roster['floor' + floor].length}명)`
+      + (att.present.length || att.exited.length
+        ? ` <span class="text-sm font-normal text-green-600">- ${att.present.length}명 있음 / ${att.exited.length}명 나감</span>` : '');
 
     const block = (floor, data, att) => `
-      <h2 class="text-lg font-bold mb-4">${head(floor, roster['floor' + floor].length, att)}</h2>
+      <h2 class="text-lg font-bold mb-4">${head(floor, att)}</h2>
       ${renderSection('🟡 정기일정제출', data.submitted, 'yellow', att, floor)}
       ${renderSection('🟢 사감승인완료', data.supervisorApproved, 'green', att, floor)}
       ${renderSection('🔵 학부모승인완료', data.parentApproved, 'blue', att, floor)}
@@ -714,8 +860,8 @@
       blue: 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100',
       green: 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'
     };
-    const presentSet = new Set(att.present.map(normName));
-    const exitedSet = new Set(att.exited.map(normName));
+    const presentSet = new Set(att.present);
+    const exitedSet = new Set(att.exited);
 
     const sorted = [...names].sort((a, b) => {
       const sa = getSeatNumber(a, floor), sb = getSeatNumber(b, floor);
@@ -734,15 +880,15 @@
         </div>
         <div class="flex flex-wrap gap-2">
           ${sorted.map(name => {
-            const key = normName(name);
+            const key = matchKey(name);
             const isPresent = presentSet.has(key);
             const isExited = !isPresent && exitedSet.has(key);
             const seatNum = getSeatNumber(name, floor);
             const isFocus = seatNum && seatNum.toString().startsWith('집중');
-            const isFree = floor === 8 && freeSeatMap[name];
+            const isFree = floor === 8 && freeSeatMap[key];
             const seatClass = isFocus ? 'seat-focus' : isFree ? 'seat-free' : 'seat-num';
-            return `<span onclick="copyName('${name}')" class="px-3 py-1 rounded-lg border cursor-pointer text-sm ${colors[color]} ${isPresent ? 'present' : ''} ${copiedText === name ? 'ring-2 ring-blue-400' : ''}">
-              ${seatNum ? `<span class="${seatClass}">[${seatNum}]</span>` : ''}${name}${isExited ? ' <span class="text-gray-400 text-xs">나감</span>' : ''}${copiedText === name ? ' ✓' : ''}
+            return `<span onclick="copyName('${esc(name)}')" class="px-3 py-1 rounded-lg border cursor-pointer text-sm ${colors[color]} ${isPresent ? 'present' : ''} ${copiedText === name ? 'ring-2 ring-blue-400' : ''}">
+              ${seatNum ? `<span class="${seatClass}">[${seatNum}]</span>` : ''}${esc(name)}${isExited ? ' <span class="text-gray-400 text-xs">나감</span>' : ''}${copiedText === name ? ' ✓' : ''}
             </span>`;
           }).join('')}
         </div>
