@@ -179,6 +179,38 @@
     if (/^[가-힣]{2,5}\d{0,2}$/.test(s)) return true;
     return /^[A-Za-z][A-Za-z.\-' ]{1,19}$/.test(s);
   }
+
+  /* --- 명단 기준 이름 연결 -----------------------------------
+     명단은 동명이인을 김민서3 처럼 숫자로 구분하지만, 제출·출석 파일은
+     김민서 로만 적혀 오는 경우가 많다. 정확히 일치하는 이름이 없으면
+     숫자를 뗀 이름으로 찾고, 후보가 단 한 명일 때만 연결한다.
+     (김민서 와 김민서3 이 둘 다 명단에 있으면 섞지 않는다)                */
+  let rosterIndex = { exact: {}, base: {} };
+
+  function buildRosterIndex() {
+    rosterIndex = { exact: {}, base: {} };
+    roster.floor7.concat(roster.floor8).forEach(n => {
+      const k = matchKey(n);
+      if (!k) return;
+      rosterIndex.exact[k] = k;
+      const b = k.replace(/\d+$/, '');
+      (rosterIndex.base[b] = rosterIndex.base[b] || []);
+      if (!rosterIndex.base[b].includes(k)) rosterIndex.base[b].push(k);
+    });
+  }
+
+  // 외부 파일의 이름 → 명단의 표준 키 (연결 실패 시 원래 키를 그대로 반환)
+  function linkKey(name) {
+    const k = matchKey(name);
+    if (!k) return k;
+    if (rosterIndex.exact[k]) return k;
+    const cands = rosterIndex.base[k.replace(/\d+$/, '')];
+    if (cands && cands.length === 1) return cands[0];
+    return k;
+  }
+  function isLinked(name) {
+    return !!rosterIndex.exact[linkKey(name)];
+  }
   function colLabel(i) {
     let s = '';
     i = i + 1;
@@ -342,7 +374,7 @@
       const dir = parseDirection(rawDir, map.headerRow >= 0);
       if (!dir) continue;
       out.records.push({
-        key: matchKey(raw),
+        key: linkKey(raw),
         dir,
         time: map.time == null ? null : parseTime(r[map.time]),
         idx: i
@@ -401,7 +433,9 @@
     const folded = foldRecords(ext.records, attNewestFirst[floor]);
 
     attendance[floor === 7 ? 'floor7' : 'floor8'] = { present: folded.present, exited: folded.exited };
-    attResult[floor] = { map, sheet, ext, folded };
+    // 명단과 연결되지 않은 이름 (다른 층 학생·직원 등) — 화면 표시에는 영향 없지만 매칭 문제를 드러낸다
+    const outside = folded.present.concat(folded.exited).filter(k => !rosterIndex.exact[k]);
+    attResult[floor] = { map, sheet, ext, folded, outside };
 
     const ok = ext.records.length > 0;
     const kind = 'att' + floor;
@@ -742,7 +776,7 @@
     ocrReview.rows.forEach(r => {
       const seat = parseInt(r.seat, 10);
       if (!r.name || !seat || seat < lo || seat > hi) return;
-      map[matchKey(r.name)] = seat;
+      map[linkKey(r.name)] = seat;
     });
     if (ocrReview.target === 'focus') {
       focusRoomSeats = map;
@@ -883,6 +917,7 @@
         if (!found) return { count: 0, sheetName, firstRows: rows.slice(0, 3) };
         const res = { submitted: new Set(), parentApproved: new Set(), supervisorApproved: new Set() };
         const statusValues = new Set();
+        const unmatched = [];
         for (let i = found.headerRow + 1; i < rows.length; i++) {
           const r = rows[i] || [];
           const name = (r[found.cols.name] ?? '').toString().trim();
@@ -890,13 +925,15 @@
           if (!name || !status) continue;
           statusValues.add(status);
           const s = normHeader(status);
-          const key = matchKey(name);
+          const key = linkKey(name);
+          if (!isLinked(name)) unmatched.push(cleanName(name));
           if (s.includes('사감')) res.supervisorApproved.add(key);
           else if (s.includes('학부모') || s.includes('부모')) res.parentApproved.add(key);
           else if (s.includes('제출')) res.submitted.add(key);
         }
         const count = res.submitted.size + res.parentApproved.size + res.supervisorApproved.size;
-        return { count, sheetName, headerRow: found.headerRow, res, statusValues: [...statusValues].slice(0, 10), firstRows: rows.slice(0, 3) };
+        return { count, sheetName, headerRow: found.headerRow, res, unmatched,
+                 statusValues: [...statusValues].slice(0, 10), firstRows: rows.slice(0, 3) };
       });
 
       if (!parsed || !parsed.count) {
@@ -908,6 +945,9 @@
         diag.sub = Object.assign({}, diag.sub, {
           ok: true, detail: parsed,
           summary: `시트 "${parsed.sheetName}" · ${parsed.headerRow + 1}행 헤더 · ${parsed.count}명 · 상태값 ${parsed.statusValues.join(', ')}`
+            + (parsed.unmatched && parsed.unmatched.length
+                ? ` · <span class="text-amber-700">명단에 없는 이름 ${parsed.unmatched.length}명: ${esc(parsed.unmatched.slice(0, 12).join(', '))}${parsed.unmatched.length > 12 ? ' …' : ''}</span>`
+                : ' · 전원 명단과 연결됨')
         });
         setBox('sub', 'ok', `${parsed.count}명 제출`);
       }
@@ -982,7 +1022,7 @@
       const r = rows[i] || [];
       const raw = r[nameCol];
       if (!isPersonName(raw)) continue;
-      const name = matchKey(raw);
+      const name = linkKey(raw);
       if (seen.has(name)) continue;
       const m = (r[seatCol] ?? '').toString().match(/\d+/);
       if (!m) continue;
@@ -1049,7 +1089,9 @@
             + `이름 ${colLabel(m.name)}열 / 방향 ${colLabel(m.dir)}열${m.time != null ? ' / 시간 ' + colLabel(m.time) + '열' : ''} · `
             + `${res.sheet.rows.length}행 중 ${res.ext.records.length}건 · `
             + (res.folded.hasTime ? '시간 기준 판정'
-              : `<button onclick="toggleOrder(${floor})" class="text-blue-600 underline">${attNewestFirst[floor] ? '최신이 위' : '최신이 아래'} (반대로)</button>`);
+              : `<button onclick="toggleOrder(${floor})" class="text-blue-600 underline">${attNewestFirst[floor] ? '최신이 위' : '최신이 아래'} (반대로)</button>`)
+            + (res.outside && res.outside.length
+                ? ` · <span class="text-amber-700">명단 외 ${res.outside.length}명 (${esc(res.outside.slice(0, 8).join(', '))}${res.outside.length > 8 ? ' …' : ''})</span>` : '');
         } else {
           line = `<span class="text-red-600 font-medium">${esc(d.reason || '인식 실패')}</span>`;
         }
@@ -1081,6 +1123,7 @@
         roster[key] = parsed.names;
         seatMap[key] = parsed.seats;
       }
+      buildRosterIndex();
       const now = new Date().toLocaleTimeString('ko-KR');
       document.getElementById('status').innerHTML = `✅ 7층 ${roster.floor7.length}명, 8층 ${roster.floor8.length}명 <span class="text-slate-400 text-xs">(${now})</span>`;
       render();
