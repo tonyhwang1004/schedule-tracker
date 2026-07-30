@@ -125,8 +125,8 @@
     return best;
   }
 
-  async function readAnyFile(file) {
-    const bytes = new Uint8Array(await file.arrayBuffer());
+  async function readAnyFile(file, prefetched) {
+    const bytes = prefetched || new Uint8Array(await file.arrayBuffer());
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     const textExt = ['csv', 'tsv', 'txt', 'psv', 'prn', 'xml', 'html', 'htm'].includes(ext);
 
@@ -535,7 +535,17 @@
   let tessPromise = null;
 
   function isImageFile(file) {
-    return (file.type && file.type.startsWith('image/')) || /\.(png|jpe?g|webp|bmp|gif)$/i.test(file.name || '');
+    return (file.type && file.type.startsWith('image/')) || /\.(png|jpe?g|webp|bmp|gif|heic|heif)$/i.test(file.name || '');
+  }
+  // 확장자·MIME이 없거나 잘못된 경우를 대비해 파일 시그니처로 판별
+  function imageSignature(b) {
+    if (b.length < 12) return null;
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'PNG';
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'JPEG';
+    if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return 'GIF';
+    if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46
+        && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return 'WEBP';
+    return null;
   }
 
   function loadTesseract() {
@@ -837,16 +847,21 @@
      ============================================================ */
   async function handleFile(kind, file) {
     if (!file) return;
-    if (isImageFile(file)) {
+    let bytes = null;
+    try { bytes = new Uint8Array(await file.arrayBuffer()); } catch (e) {}
+
+    const sig = bytes ? imageSignature(bytes) : null;
+    if (isImageFile(file) || sig) {
       if (kind === 'free' || kind === 'focus') return handleSeatImage(kind, file);
-      diag[kind] = { file: file.name, ok: false, reason: '이미지는 좌석 배치도(자유석·집중실)에서만 인식할 수 있습니다. 이 항목은 엑셀이나 CSV로 올려주세요.' };
+      diag[kind] = { file: file.name, ok: false,
+        reason: `이미지 파일입니다${sig ? ' (' + sig + ')' : ''} — 이미지 인식은 좌석 배치도(자유석·집중실)에서만 됩니다. 이 항목은 엑셀이나 CSV로 올려주세요.` };
       setBox(kind, 'warn', '이미지 지원 안 함');
       renderDiag();
       return;
     }
     setBox(kind, 'loading', file.name);
     try {
-      const { workbook, info } = await readAnyFile(file);
+      const { workbook, info } = await readAnyFile(file, bytes);
       const sheets = workbookSheets(workbook);
       diag[kind] = { file: file.name, info };
       HANDLERS[kind](sheets);
