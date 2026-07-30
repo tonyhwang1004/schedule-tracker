@@ -46,9 +46,10 @@
     <div class="flex flex-wrap items-center gap-4 mb-4 text-sm text-slate-600">
       <span class="flex items-center gap-1"><span class="w-4 h-4 rounded border-2 border-green-500 bg-green-100"></span> 현재 있음</span>
       <span class="flex items-center gap-1"><span class="text-gray-400 text-xs">나감</span> = 퇴실</span>
-      <span class="flex items-center gap-1"><span class="text-gray-500 text-xs">[번호]</span> = 지정석</span>
+      <span class="flex items-center gap-1"><span class="text-gray-500 text-xs">[번호]</span> = 지정석·칸막이·프리미엄</span>
       <span class="flex items-center gap-1"><span class="text-orange-500 text-xs font-bold">[번호]</span> = 자유석</span>
       <span class="flex items-center gap-1"><span class="text-purple-500 text-xs font-bold">[집중N]</span> = 집중실</span>
+      <span class="text-xs text-slate-400">좌석 정보는 명단 시트의 좌석타입·좌석번호에서 읽습니다</span>
     </div>
 
     <div id="result"></div>
@@ -57,7 +58,7 @@
   <script>
   /* ================= 설정 ================= */
   const SPREADSHEET_ID = '1OVEffnCRTZ1A-cVCb4CYiYe3MicyI9TSkJNsau4mGVo';
-  const SHEET_GIDS = { floor7: '141026233', floor8: '910829726' };
+  const SHEET_GIDS = { floor7: '488759198', floor8: '668013966' };   // 7층전체학생명단 / 8층전체학생명단
   const ACCEPT = '.csv,.tsv,.txt,.xlsx,.xlsm,.xlsb,.xls,.ods,.png,.jpg,.jpeg,.webp,.bmp';
 
   /* ================= 상태 ================= */
@@ -82,7 +83,7 @@
     att8:  { icon: '🏢', title: '8층 출석',    hint: '출입 기록' },
     att7:  { icon: '🏢', title: '7층 출석',    hint: '출입 기록' },
     focus: { icon: '🎯', title: '집중실',      hint: '좌석 배치 (엑셀·이미지)' },
-    free:  { icon: '🪑', title: '자유석 배치', hint: '엑셀 · 배치도 이미지' }
+    free:  { icon: '🪑', title: '좌석 덮어쓰기', hint: '선택 · 엑셀 또는 배치도 이미지' }
   };
 
   /* ============================================================
@@ -530,7 +531,7 @@
   /* ============================================================
      6-A. 좌석 배치도 이미지 → OCR → 명단 교정 → 검토
      ============================================================ */
-  const SEAT_RANGE = { free: [57, 104], focus: [1, 120] };
+  const SEAT_RANGE = { free: [1, 200], focus: [1, 200] };   // 배치도 이미지에서 인식할 좌석번호 범위
   let ocrReview = null;   // { target, rows, busy, note }
   let tessPromise = null;
 
@@ -928,13 +929,13 @@
     },
 
     free: sheets => {
-      const parsed = bestSheet(sheets, (rows, sheetName) => parseNameSeat(rows, sheetName, [57, 104]));
+      const parsed = bestSheet(sheets, (rows, sheetName) => parseNameSeat(rows, sheetName, [1, 300]));
       freeSeatMap = {};
       if (parsed && parsed.count) parsed.map.forEach(({ name, seat }) => { freeSeatMap[name] = seat; });
       const count = Object.keys(freeSeatMap).length;
       diag.free = Object.assign({}, diag.free, {
         ok: count > 0, detail: parsed,
-        summary: count > 0 ? `시트 "${parsed.sheetName}" · ${count}명${parsed.skipped ? ` · 범위(57~104) 밖 ${parsed.skipped}건 제외` : ''}` : '',
+        summary: count > 0 ? `시트 "${parsed.sheetName}" · ${count}명${parsed.skipped ? ` · 좌석번호 없는 ${parsed.skipped}행 제외` : ''}` : '',
         reason: count > 0 ? '' : '이름·좌석번호를 찾지 못했습니다'
       });
       setBox('free', count > 0 ? 'ok' : 'warn', count > 0 ? `${count}명 로드 완료` : '열 인식 실패');
@@ -1088,23 +1089,42 @@
     }
   }
 
+  // 명단 시트 파싱 — 헤더 이름으로 열을 찾고, 좌석타입까지 읽는다
   function parseNamesAndSeats(csv) {
-    const names = [], seats = {};
-    csv.split('\n').forEach(line => {
-      if (!line.trim()) return;
-      const cols = parseCSVRow(line);
-      const name = (cols[0] || '').replace(/"/g, '').trim();
-      const seatRaw = (cols[4] || '').replace(/"/g, '').trim();
-      if (name && /^[가-힣]{2,4}\d{0,2}$/.test(name) && !name.includes('학생') && !name.includes('이름')) {
-        names.push(name);
-        if (seatRaw.startsWith('집중')) return;
-        const m = seatRaw.match(/^(\d+)/);
-        if (m) {
-          const n = parseInt(m[1], 10);
-          if (n >= 1 && n <= 56) seats[name] = n;
-        }
+    const rows = csv.split(/\r?\n/).filter(l => l.trim()).map(parseCSVRow)
+      .map(r => r.map(c => c.replace(/^"|"$/g, '').trim()));
+
+    let head = -1, ci = null;
+    for (let i = 0; i < Math.min(rows.length, 10); i++) {
+      const h = rows[i].map(normHeader);
+      const n = h.findIndex(v => v === '이름' || v === '성명');
+      const s = h.findIndex(v => v === '좌석번호' || v === '좌석');
+      if (n !== -1 && s !== -1) {
+        head = i;
+        ci = { name: n, seat: s, type: h.findIndex(v => v === '좌석타입' || v === '좌석유형') };
+        break;
       }
-    });
+    }
+    if (head === -1) { head = 0; ci = { name: 0, seat: 4, type: 3 }; }   // 예전 구조로 폴백
+
+    const names = [], seats = {};
+    for (let i = head + 1; i < rows.length; i++) {
+      const r = rows[i];
+      const name = cleanName(r[ci.name]);
+      if (!/^[가-힣]{2,5}\d{0,2}$/.test(name)) continue;
+      names.push(name);
+
+      const seatRaw = (r[ci.seat] || '').trim();
+      const type = ci.type >= 0 ? (r[ci.type] || '').trim() : '';
+      const key = matchKey(name);
+      if (/집중/.test(seatRaw) || /집중/.test(type)) {
+        const m = seatRaw.match(/(\d+)/);
+        seats[key] = { seat: m ? +m[1] : null, type: '집중실' };
+        continue;
+      }
+      const m = seatRaw.match(/(\d+)/);
+      if (m) seats[key] = { seat: +m[1], type };
+    }
     return { names, seats };
   }
 
@@ -1123,14 +1143,18 @@
   /* ============================================================
      10. 렌더링
      ============================================================ */
-  function getSeatNumber(name, floor) {
+  // 좌석 표시 정보 — 업로드 파일이 있으면 그것이 시트값을 덮어쓴다
+  function getSeatInfo(name, floor) {
     const key = matchKey(name);
-    if (focusRoomSeats[key]) return '집중' + focusRoomSeats[key];
-    if (floor === 8 && freeSeatMap[key]) return freeSeatMap[key];
-    const map = floor === 7 ? seatMap.floor7 : seatMap.floor8;
-    const seatNum = map[name];
-    if (!seatNum || typeof seatNum !== 'number' || seatNum > 100) return null;
-    return seatNum;
+    if (focusRoomSeats[key]) return { label: '집중' + focusRoomSeats[key], cls: 'seat-focus', sort: 100000 + focusRoomSeats[key] };
+    if (freeSeatMap[key]) return { label: String(freeSeatMap[key]), cls: 'seat-free', sort: freeSeatMap[key] };
+
+    const e = (floor === 7 ? seatMap.floor7 : seatMap.floor8)[key];
+    if (!e) return null;
+    if (e.type === '집중실') return { label: '집중' + (e.seat || ''), cls: 'seat-focus', sort: 100000 + (e.seat || 0) };
+    if (!e.seat) return null;
+    const free = /자유/.test(e.type || '');
+    return { label: String(e.seat), cls: free ? 'seat-free' : 'seat-num', sort: e.seat };
   }
 
   function copyName(name) {
@@ -1195,13 +1219,10 @@
     const presentSet = new Set(att.present);
     const exitedSet = new Set(att.exited);
 
+    // 좌석번호 순 · 좌석 없는 학생과 집중실은 뒤로
     const sorted = [...names].sort((a, b) => {
-      const sa = getSeatNumber(a, floor), sb = getSeatNumber(b, floor);
-      const fa = sa && sa.toString().startsWith('집중'), fb = sb && sb.toString().startsWith('집중');
-      if (fa && !fb) return 1;
-      if (!fa && fb) return -1;
-      if (fa && fb) return (parseInt(sa.toString().replace('집중', '')) || 999) - (parseInt(sb.toString().replace('집중', '')) || 999);
-      return (parseInt(sa) || 999) - (parseInt(sb) || 999);
+      const ia = getSeatInfo(a, floor), ib = getSeatInfo(b, floor);
+      return (ia ? ia.sort : 99999) - (ib ? ib.sort : 99999);
     });
 
     return `
@@ -1215,12 +1236,9 @@
             const key = matchKey(name);
             const isPresent = presentSet.has(key);
             const isExited = !isPresent && exitedSet.has(key);
-            const seatNum = getSeatNumber(name, floor);
-            const isFocus = seatNum && seatNum.toString().startsWith('집중');
-            const isFree = floor === 8 && freeSeatMap[key];
-            const seatClass = isFocus ? 'seat-focus' : isFree ? 'seat-free' : 'seat-num';
+            const info = getSeatInfo(name, floor);
             return `<span onclick="copyName('${esc(name)}')" class="px-3 py-1 rounded-lg border cursor-pointer text-sm ${colors[color]} ${isPresent ? 'present' : ''} ${copiedText === name ? 'ring-2 ring-blue-400' : ''}">
-              ${seatNum ? `<span class="${seatClass}">[${seatNum}]</span>` : ''}${esc(name)}${isExited ? ' <span class="text-gray-400 text-xs">나감</span>' : ''}${copiedText === name ? ' ✓' : ''}
+              ${info ? `<span class="${info.cls}">[${esc(info.label)}]</span>` : ''}${esc(name)}${isExited ? ' <span class="text-gray-400 text-xs">나감</span>' : ''}${copiedText === name ? ' ✓' : ''}
             </span>`;
           }).join('')}
         </div>
